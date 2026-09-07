@@ -33,7 +33,7 @@ public final class ToolRegistry {
 
     public List<ToolDescriptor<?>> descriptors() {
         return tools.values().stream()
-                .map(AgentTool::descriptor)
+                .<ToolDescriptor<?>>map(tool -> tool.descriptor())
                 .toList();
     }
 }
