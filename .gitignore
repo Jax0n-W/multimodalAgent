@@ -1,0 +1,28 @@
+target/
+.m2/
+.tools/
+.idea/
+.vscode/
+*.iml
+data/
+logs/
+.DS_Store
+*.log
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+application-local.yml
+application-local.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Local runtime files
+*.pid
+*.tmp
+*.swp

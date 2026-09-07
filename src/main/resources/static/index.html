@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>多模态智心 Agent</title>
+  <link rel="stylesheet" href="/styles.css?v=20260601-multimodal-rebuild">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="identity">
+        <div class="logo-mark">心</div>
+        <div>
+          <p class="kicker">Multimodal MindCare Agent</p>
+          <h1>多模态智心</h1>
+        </div>
+      </div>
+      <div class="top-status">
+        <span id="serviceState" class="status-dot">连接中</span>
+        <span id="modelState" class="status-dot">模型读取中</span>
+      </div>
+      <form id="loginForm" class="login-strip">
+        <input id="username" name="username" value="student" autocomplete="username" aria-label="账号">
+        <input id="password" name="password" value="student123" type="password" autocomplete="current-password" aria-label="密码">
+        <button type="submit">进入</button>
+        <p id="loginState">student / student123</p>
+      </form>
+      <section id="accountPanel" class="account-strip" hidden>
+        <div>
+          <strong id="activeAccount">已登录</strong>
+          <span id="activeRole">学生账号</span>
+        </div>
+        <button id="switchAccount" type="button">切换</button>
+      </section>
+    </header>
+
+    <section id="studentView" class="student-console">
+      <aside class="sensor-deck">
+        <section class="glass-panel intake-card">
+          <p class="kicker">Intake</p>
+          <h2>多模态输入</h2>
+          <form id="chatForm" class="intake-form">
+            <textarea id="messageInput" rows="8" placeholder="写下你现在想说的话"></textarea>
+            <div class="sensor-grid">
+              <label class="sensor-tile">
+                <input id="audioInput" type="file" accept="audio/*">
+                <span>Whisper</span>
+                <strong>语音</strong>
+              </label>
+              <label class="sensor-tile">
+                <input id="imageInput" type="file" accept="image/*">
+                <span>MediaPipe</span>
+                <strong>图像</strong>
+              </label>
+              <label class="sensor-tile">
+                <input id="videoInput" type="file" accept="video/*">
+                <span>Face Mesh</span>
+                <strong>视频</strong>
+              </label>
+            </div>
+            <div id="attachmentState" class="attachment-tray">暂无附件</div>
+            <div class="form-actions">
+              <button id="clearAttachments" type="button" class="secondary" hidden>清空附件</button>
+              <button id="newSessionButton" type="button" class="secondary">新会话</button>
+              <button id="sendButton" type="submit" class="primary">发送</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="glass-panel sample-card">
+          <p class="kicker">Quick Signal</p>
+          <div class="sample-list">
+            <button type="button" data-prompt="我最近压力很大，晚上总是睡不着，想先把原因说清楚。">焦虑倾诉</button>
+            <button type="button" data-prompt="这周一直很低落，做什么都提不起劲。">低落陪伴</button>
+            <button type="button" data-prompt="帮我把今晚的复习任务拆成一个具体计划。">普通聊天</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="dialog-stage">
+        <div class="stage-head">
+          <div>
+            <p class="kicker">Streaming Console</p>
+            <h2 id="profileText">学生对话</h2>
+          </div>
+          <div id="sessionBadge" class="session-chip">READY</div>
+        </div>
+        <div id="messages" class="message-stream" aria-live="polite"></div>
+      </section>
+
+      <aside class="pipeline-panel">
+        <section class="glass-panel pipeline-card">
+          <p class="kicker">Agent Loop</p>
+          <h2>本轮链路</h2>
+          <div id="pipelineSteps" class="pipeline-steps"></div>
+        </section>
+        <section class="glass-panel model-card">
+          <p class="kicker">Runtime</p>
+          <dl>
+            <div><dt>模型</dt><dd id="runtimeModel">读取中</dd></div>
+            <div><dt>向量库</dt><dd>Chroma / 本地召回</dd></div>
+            <div><dt>工具</dt><dd>Excel + 邮件预警</dd></div>
+          </dl>
+        </section>
+      </aside>
+    </section>
+
+    <section id="adminView" class="admin-console" hidden>
+      <header class="admin-head">
+        <div>
+          <p class="kicker">Counselor Workbench</p>
+          <h2>心理中心工作台</h2>
+        </div>
+        <button id="adminRefresh" type="button">刷新</button>
+      </header>
+
+      <section id="adminStats" class="stats-grid"></section>
+
+      <section class="admin-layout">
+        <section class="admin-column priority-column">
+          <div class="column-head">
+            <h3>风险队列</h3>
+            <span id="queueCount">0</span>
+          </div>
+          <div id="adminReportRows" class="record-list"></div>
+        </section>
+
+        <section class="admin-column">
+          <div class="column-head">
+            <h3>数据闭环</h3>
+          </div>
+          <div id="excelRows" class="record-list"></div>
+        </section>
+
+        <section class="admin-column">
+          <div class="column-head">
+            <h3>预警送达</h3>
+          </div>
+          <div id="emailRows" class="record-list"></div>
+        </section>
+      </section>
+
+      <form id="knowledgeUploadForm" class="knowledge-bar">
+        <div>
+          <p class="kicker">Knowledge Base</p>
+          <strong id="knowledgeUploadState">上传 PDF / Markdown / TXT</strong>
+        </div>
+        <label class="upload-button">
+          <input id="knowledgeFile" type="file" accept=".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain">
+          <span>选择文件</span>
+        </label>
+        <button type="submit">入库</button>
+      </form>
+    </section>
+  </main>
+
+  <section id="detailOverlay" class="detail-overlay" hidden>
+    <article class="detail-drawer">
+      <header>
+        <div>
+          <p id="detailKicker" class="kicker">详情</p>
+          <h2 id="detailTitle">记录</h2>
+          <p id="detailMeta"></p>
+        </div>
+        <button id="closeDetail" type="button">关闭</button>
+      </header>
+      <div id="detailBody" class="detail-body"></div>
+    </article>
+  </section>
+
+  <script src="/app.js?v=20260601-multimodal-rebuild"></script>
+</body>
+</html>

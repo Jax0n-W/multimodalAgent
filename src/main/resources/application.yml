@@ -1,0 +1,109 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: multimodalAgent-agent
+  datasource:
+    url: ${DB_URL:jdbc:h2:file:./data/multimodalAgent;MODE=MySQL;DATABASE_TO_LOWER=TRUE}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:}
+    driver-class-name: ${DB_DRIVER:org.h2.Driver}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
+      timeout: ${REDIS_TIMEOUT:2s}
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${MAIL_SMTP_AUTH:true}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS_ENABLE:false}
+            required: ${MAIL_SMTP_STARTTLS_REQUIRED:false}
+          ssl:
+            enable: ${MAIL_SMTP_SSL_ENABLE:false}
+          connectiontimeout: ${MAIL_SMTP_CONNECTION_TIMEOUT:10000}
+          timeout: ${MAIL_SMTP_TIMEOUT:10000}
+          writetimeout: ${MAIL_SMTP_WRITE_TIMEOUT:10000}
+
+logging:
+  level:
+    root: INFO
+
+management:
+  health:
+    mail:
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+multimodal-agent:
+  ai:
+    provider: ${AI_PROVIDER:ollama}
+    temperature: ${AI_TEMPERATURE:0.35}
+    max-tokens: ${AI_MAX_TOKENS:512}
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      model: ${OLLAMA_MODEL:multimodalAgent-qwen2.5-7b-ft:latest}
+    openai:
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      api-key: ${OPENAI_API_KEY:}
+      model: ${OPENAI_MODEL:gpt-4o-mini}
+  chat:
+    history-limit: ${CHAT_HISTORY_LIMIT:10}
+    short-memory-ttl-hours: ${CHAT_SHORT_MEMORY_TTL_HOURS:24}
+  embedding:
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+    api-key: ${OPENAI_API_KEY:}
+    model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+  knowledge:
+    top-k: ${RAG_TOP_K:4}
+    use-chroma: ${USE_CHROMA:true}
+    chroma-base-url: ${CHROMA_BASE_URL:http://localhost:8000}
+    chroma-collection: ${CHROMA_COLLECTION:multimodalAgent_knowledge}
+    chunk-size: ${KNOWLEDGE_CHUNK_SIZE:512}
+    chunk-overlap: ${KNOWLEDGE_CHUNK_OVERLAP:64}
+  multimodal:
+    text-weight: ${MULTIMODAL_TEXT_WEIGHT:0.1}
+    audio-weight: ${MULTIMODAL_AUDIO_WEIGHT:0.4}
+    visual-weight: ${MULTIMODAL_VISUAL_WEIGHT:0.5}
+    whisper:
+      mode: ${WHISPER_MODE:mock}
+      base-url: ${WHISPER_BASE_URL:${OPENAI_BASE_URL:https://api.openai.com}}
+      api-key: ${WHISPER_API_KEY:${OPENAI_API_KEY:}}
+      model: ${WHISPER_MODEL:whisper-1}
+    media-pipe:
+      mode: ${MEDIAPIPE_MODE:local-rule}
+      url: ${MEDIAPIPE_URL:http://localhost:8090/analyze}
+  mcp:
+    excel:
+      mode: ${MCP_EXCEL_MODE:mcp}
+      url: ${MCP_EXCEL_URL:${MCP_SERVER_URL:http://localhost:${SERVER_PORT:8080}/mcp}}
+      local-path: ${MCP_EXCEL_LOCAL_PATH:./data/multimodalAgent-reports.xlsx}
+    email:
+      mode: ${MCP_EMAIL_MODE:mcp}
+      url: ${MCP_EMAIL_URL:${MCP_SERVER_URL:http://localhost:${SERVER_PORT:8080}/mcp}}
+      from: ${ALERT_MAIL_FROM:multimodalAgent-alerts@example.com}
+      recipients: ${ALERT_MAIL_RECIPIENTS:counselor-alerts@example.com}
+      max-retries: ${ALERT_MAIL_MAX_RETRIES:2}

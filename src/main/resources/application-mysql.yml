@@ -1,0 +1,6 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/multimodalAgent?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
+    username: ${DB_USERNAME:multimodalAgent}
+    password: ${DB_PASSWORD:multimodalAgent}
+    driver-class-name: com.mysql.cj.jdbc.Driver
