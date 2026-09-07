@@ -1,10 +1,12 @@
 package com.multimodalAgent.agent.runtime.tool;
 
-import java.util.Map;
+public interface AgentTool<I, O> {
 
-public interface AgentTool {
+    ToolDescriptor<I> descriptor();
 
-    String name();
+    O execute(I input);
 
-    ToolResult execute(Map<String, Object> arguments);
+    default String name() {
+        return descriptor().name();
+    }
 }

@@ -6,8 +6,8 @@ import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
-import com.multimodalAgent.agent.runtime.tool.AgentTool;
-import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
+import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
+import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolResult;
 
 import java.util.ArrayList;
@@ -19,11 +19,11 @@ import java.util.Set;
 public final class AgentRunner {
 
     private final AgentModel model;
-    private final ToolRegistry toolRegistry;
+    private final ToolExecutor toolExecutor;
 
-    public AgentRunner(AgentModel model, ToolRegistry toolRegistry) {
+    public AgentRunner(AgentModel model, ToolExecutor toolExecutor) {
         this.model = Objects.requireNonNull(model, "model must not be null");
-        this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry must not be null");
+        this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor must not be null");
     }
 
     public AgentRunResult run(AgentRunSpec spec) {
@@ -46,6 +46,7 @@ public final class AgentRunner {
                         toolsUsed,
                         messages,
                         totalUsage,
+                        null,
                         exception.getMessage()
                 );
             }
@@ -60,63 +61,33 @@ public final class AgentRunner {
                         List.copyOf(toolsUsed),
                         messages,
                         totalUsage,
+                        null,
                         null
                 );
             }
 
             messages.add(AgentMessage.assistantToolCalls(turn.toolCalls()));
             for (ToolCall toolCall : turn.toolCalls()) {
-                AgentTool tool = toolRegistry.find(toolCall.name()).orElse(null);
-                if (tool == null) {
-                    String error = "Unknown tool: " + toolCall.name();
-                    messages.add(AgentMessage.toolResult(
-                            toolCall.id(), toolCall.name(), error
-                    ));
-                    return stopped(
-                            AgentStopReason.TOOL_ERROR,
-                            iteration,
-                            toolsUsed,
-                            messages,
-                            totalUsage,
-                            error
-                    );
-                }
-
-                toolsUsed.add(tool.name());
-                ToolResult result;
-                try {
-                    result = Objects.requireNonNull(
-                            tool.execute(toolCall.arguments()),
-                            "tool returned a null result"
-                    );
-                } catch (RuntimeException exception) {
-                    String error = "Tool execution failed: " + tool.name() + ": " + exception.getMessage();
-                    messages.add(AgentMessage.toolResult(
-                            toolCall.id(), tool.name(), error
-                    ));
-                    return stopped(
-                            AgentStopReason.TOOL_ERROR,
-                            iteration,
-                            toolsUsed,
-                            messages,
-                            totalUsage,
-                            error
-                    );
-                }
-
+                ToolResult result = toolExecutor.execute(toolCall);
                 messages.add(AgentMessage.toolResult(
-                        toolCall.id(), tool.name(), result.content()
+                        toolCall.id(), toolCall.name(), result.messageForModel()
                 ));
                 if (!result.success()) {
+                    ToolErrorCode errorCode = result.error().code();
+                    if (errorCode != ToolErrorCode.TOOL_NOT_FOUND) {
+                        toolsUsed.add(toolCall.name());
+                    }
                     return stopped(
                             AgentStopReason.TOOL_ERROR,
                             iteration,
                             toolsUsed,
                             messages,
                             totalUsage,
-                            result.content()
+                            errorCode,
+                            result.error().message()
                     );
                 }
+                toolsUsed.add(toolCall.name());
             }
         }
 
@@ -126,6 +97,7 @@ public final class AgentRunner {
                 toolsUsed,
                 messages,
                 totalUsage,
+                null,
                 "Maximum model iterations reached"
         );
     }
@@ -136,6 +108,7 @@ public final class AgentRunner {
             Set<String> toolsUsed,
             List<AgentMessage> messages,
             TokenUsage tokenUsage,
+            ToolErrorCode toolErrorCode,
             String errorMessage
     ) {
         return new AgentRunResult(
@@ -145,6 +118,7 @@ public final class AgentRunner {
                 List.copyOf(toolsUsed),
                 messages,
                 tokenUsage,
+                toolErrorCode,
                 errorMessage
         );
     }

@@ -2,6 +2,7 @@ package com.multimodalAgent.agent.runtime;
 
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
+import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 
 import java.util.List;
 import java.util.Objects;
@@ -13,6 +14,7 @@ public record AgentRunResult(
         List<String> toolsUsed,
         List<AgentMessage> messages,
         TokenUsage tokenUsage,
+        ToolErrorCode toolErrorCode,
         String errorMessage
 ) {
 

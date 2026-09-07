@@ -1,13 +1,20 @@
 package com.multimodalAgent.agent.runtime;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentMessageRole;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
+import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
+import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
+import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
+import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
-import com.multimodalAgent.agent.runtime.tool.ToolResult;
+import com.multimodalAgent.agent.tool.builtin.KnowledgeSearchInput;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -19,12 +26,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentRunnerTest {
 
+    private static final Validator VALIDATOR = Validation.buildDefaultValidatorFactory().getValidator();
+
     @Test
     void shouldCompleteWithDirectModelAnswer() {
         ScriptedAgentModel model = new ScriptedAgentModel(
                 ModelTurn.finalAnswer("Redis Sentinel 是 Redis 的高可用组件。")
         );
-        AgentRunner runner = new AgentRunner(model, new ToolRegistry(List.of()));
+        AgentRunner runner = runner(model, List.of());
 
         AgentRunResult result = runner.run(spec(3));
 
@@ -44,10 +53,7 @@ class AgentRunnerTest {
                 )),
                 ModelTurn.finalAnswer("Redis Sentinel 用于 Redis 主从架构中的自动故障转移。")
         );
-        AgentRunner runner = new AgentRunner(
-                model,
-                new ToolRegistry(List.of(new FakeKnowledgeSearchTool()))
-        );
+        AgentRunner runner = runner(model, List.of(new FakeKnowledgeSearchTool()));
 
         AgentRunResult result = runner.run(spec(3));
 
@@ -77,12 +83,13 @@ class AgentRunnerTest {
                         Map.of()
                 ))
         );
-        AgentRunner runner = new AgentRunner(model, new ToolRegistry(List.of()));
+        AgentRunner runner = runner(model, List.of());
 
         AgentRunResult result = runner.run(spec(3));
 
         assertEquals(AgentStopReason.TOOL_ERROR, result.stopReason());
         assertEquals(1, result.iterations());
+        assertEquals(ToolErrorCode.TOOL_NOT_FOUND, result.toolErrorCode());
         assertEquals("Unknown tool: unknown_tool", result.errorMessage());
     }
 
@@ -93,10 +100,7 @@ class AgentRunnerTest {
                 knowledgeSearchCall("call-2"),
                 knowledgeSearchCall("call-3")
         );
-        AgentRunner runner = new AgentRunner(
-                model,
-                new ToolRegistry(List.of(new FakeKnowledgeSearchTool()))
-        );
+        AgentRunner runner = runner(model, List.of(new FakeKnowledgeSearchTool()));
 
         AgentRunResult result = runner.run(spec(3));
 
@@ -122,16 +126,33 @@ class AgentRunnerTest {
         ));
     }
 
-    private static final class FakeKnowledgeSearchTool implements AgentTool {
+    private AgentRunner runner(ScriptedAgentModel model, List<? extends AgentTool<?, ?>> tools) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        ToolExecutor toolExecutor = new ToolExecutor(
+                new ToolRegistry(tools),
+                new ToolArgumentResolver(objectMapper, VALIDATOR),
+                objectMapper
+        );
+        return new AgentRunner(model, toolExecutor);
+    }
+
+    private static final class FakeKnowledgeSearchTool
+            implements AgentTool<KnowledgeSearchInput, String> {
+
+        private static final ToolDescriptor<KnowledgeSearchInput> DESCRIPTOR = new ToolDescriptor<>(
+                "knowledge_search",
+                "Search the fake knowledge base",
+                KnowledgeSearchInput.class
+        );
 
         @Override
-        public String name() {
-            return "knowledge_search";
+        public ToolDescriptor<KnowledgeSearchInput> descriptor() {
+            return DESCRIPTOR;
         }
 
         @Override
-        public ToolResult execute(Map<String, Object> arguments) {
-            return ToolResult.success("Redis Sentinel provides automatic failover.");
+        public String execute(KnowledgeSearchInput input) {
+            return "Redis Sentinel provides automatic failover.";
         }
     }
 }
