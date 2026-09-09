@@ -31,14 +31,14 @@ public final class ToolArgumentResolver {
 
         I input;
         try {
-            input = objectMapper.convertValue(rawArguments, inputType);
+            input = objectMapper.convertValue(rawArguments, inputType); // 将原始参数转换为工具输入类型
         } catch (IllegalArgumentException exception) {
             throw new ToolValidationException(
                     "Arguments could not be converted to " + inputType.getSimpleName()
             );
         }
 
-        Set<ConstraintViolation<I>> violations = validator.validate(input);
+        Set<ConstraintViolation<I>> violations = validator.validate(input);  // 验证工具输入参数是否符合约束
         if (!violations.isEmpty()) {
             String details = violations.stream()
                     .sorted(Comparator.comparing(violation -> violation.getPropertyPath().toString()))

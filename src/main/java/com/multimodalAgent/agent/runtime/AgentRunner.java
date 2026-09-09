@@ -9,6 +9,8 @@ import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolResult;
+import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyContext;
+import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyDecision;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -31,6 +33,12 @@ public final class AgentRunner {
         List<AgentMessage> messages = new ArrayList<>(spec.messages());
         Set<String> toolsUsed = new LinkedHashSet<>();
         TokenUsage totalUsage = TokenUsage.ZERO;
+        ToolPolicyContext policyContext = new ToolPolicyContext(
+                spec.runId(),
+                spec.sessionId(),
+                spec.allowedTools(),
+                spec.approvedToolCallIds()
+        );
 
         for (int iteration = 1; iteration <= spec.maxIterations(); iteration++) {
             ModelTurn turn;
@@ -47,6 +55,7 @@ public final class AgentRunner {
                         messages,
                         totalUsage,
                         null,
+                        null,
                         exception.getMessage()
                 );
             }
@@ -62,13 +71,39 @@ public final class AgentRunner {
                         messages,
                         totalUsage,
                         null,
+                        null,
                         null
                 );
             }
 
             messages.add(AgentMessage.assistantToolCalls(turn.toolCalls()));
             for (ToolCall toolCall : turn.toolCalls()) {
-                ToolResult result = toolExecutor.execute(toolCall);
+                ToolResult result = toolExecutor.execute(toolCall, policyContext);
+                if (result.policyBlocked()) {
+                    return stopped(
+                            AgentStopReason.POLICY_BLOCKED,
+                            iteration,
+                            toolsUsed,
+                            messages,
+                            totalUsage,
+                            null,
+                            result.policyDecision(),
+                            result.policyDecision().reason()
+                    );
+                }
+                if (result.approvalRequired()) {
+                    return stopped(
+                            AgentStopReason.WAITING_APPROVAL,
+                            iteration,
+                            toolsUsed,
+                            messages,
+                            totalUsage,
+                            null,
+                            result.policyDecision(),
+                            result.policyDecision().reason()
+                    );
+                }
+
                 messages.add(AgentMessage.toolResult(
                         toolCall.id(), toolCall.name(), result.messageForModel()
                 ));
@@ -84,6 +119,7 @@ public final class AgentRunner {
                             messages,
                             totalUsage,
                             errorCode,
+                            null,
                             result.error().message()
                     );
                 }
@@ -98,6 +134,7 @@ public final class AgentRunner {
                 messages,
                 totalUsage,
                 null,
+                null,
                 "Maximum model iterations reached"
         );
     }
@@ -109,6 +146,7 @@ public final class AgentRunner {
             List<AgentMessage> messages,
             TokenUsage tokenUsage,
             ToolErrorCode toolErrorCode,
+            ToolPolicyDecision policyDecision,
             String errorMessage
     ) {
         return new AgentRunResult(
@@ -119,6 +157,7 @@ public final class AgentRunner {
                 messages,
                 tokenUsage,
                 toolErrorCode,
+                policyDecision,
                 errorMessage
         );
     }

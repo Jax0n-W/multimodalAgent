@@ -2,6 +2,8 @@ package com.multimodalAgent.agent.runtime.tool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
+import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
+import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyContext;
 import com.multimodalAgent.agent.tool.builtin.KnowledgeSearchInput;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -9,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -25,7 +28,7 @@ class ToolExecutorTest {
         ToolResult result = executor.execute(call(Map.of(
                 "query", "Redis Sentinel",
                 "topK", 5
-        )));
+        )), allowedContext());
 
         assertTrue(result.success());
         assertEquals("result for Redis Sentinel, topK=5", result.content());
@@ -38,7 +41,7 @@ class ToolExecutorTest {
         CountingKnowledgeSearchTool tool = new CountingKnowledgeSearchTool();
         ToolExecutor executor = executor(tool);
 
-        ToolResult result = executor.execute(call(Map.of("topK", 5)));
+        ToolResult result = executor.execute(call(Map.of("topK", 5)), allowedContext());
 
         assertEquals(ToolErrorCode.INVALID_ARGUMENTS, result.error().code());
         assertEquals(0, tool.executionCount());
@@ -52,7 +55,7 @@ class ToolExecutorTest {
         ToolResult result = executor.execute(call(Map.of(
                 "query", "Redis Sentinel",
                 "topK", "abc"
-        )));
+        )), allowedContext());
 
         assertEquals(ToolErrorCode.INVALID_ARGUMENTS, result.error().code());
         assertEquals(0, tool.executionCount());
@@ -66,7 +69,7 @@ class ToolExecutorTest {
         ToolResult result = executor.execute(call(Map.of(
                 "query", "Redis Sentinel",
                 "topK", -1
-        )));
+        )), allowedContext());
 
         assertEquals(ToolErrorCode.INVALID_ARGUMENTS, result.error().code());
         assertEquals(0, tool.executionCount());
@@ -77,7 +80,7 @@ class ToolExecutorTest {
         ToolExecutor executor = executor();
         ToolCall call = new ToolCall("call-unknown", "unknown_tool", Map.of());
 
-        ToolResult result = executor.execute(call);
+        ToolResult result = executor.execute(call, allowedContext());
 
         assertEquals(ToolErrorCode.TOOL_NOT_FOUND, result.error().code());
         assertEquals("Unknown tool: unknown_tool", result.error().message());
@@ -87,11 +90,21 @@ class ToolExecutorTest {
         return new ToolCall("call-1", "knowledge_search", arguments);
     }
 
+    private ToolPolicyContext allowedContext() {
+        return new ToolPolicyContext(
+                "run-001",
+                "session-001",
+                Set.of("knowledge_search"),
+                Set.of()
+        );
+    }
+
     private ToolExecutor executor(AgentTool<?, ?>... tools) {
         ObjectMapper objectMapper = new ObjectMapper();
         return new ToolExecutor(
                 new ToolRegistry(List.of(tools)),
                 new ToolArgumentResolver(objectMapper, VALIDATOR),
+                new DefaultToolPolicyEngine(),
                 objectMapper
         );
     }
@@ -102,7 +115,11 @@ class ToolExecutorTest {
         private static final ToolDescriptor<KnowledgeSearchInput> DESCRIPTOR = new ToolDescriptor<>(
                 "knowledge_search",
                 "Search the test knowledge base",
-                KnowledgeSearchInput.class
+                KnowledgeSearchInput.class,
+                ToolRisk.LOW,
+                true,
+                true,
+                false
         );
 
         private int executionCount;

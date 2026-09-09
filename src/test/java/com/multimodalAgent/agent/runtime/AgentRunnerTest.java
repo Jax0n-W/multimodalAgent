@@ -12,6 +12,8 @@ import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
 import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
+import com.multimodalAgent.agent.runtime.tool.ToolRisk;
+import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
 import com.multimodalAgent.agent.tool.builtin.KnowledgeSearchInput;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -114,7 +117,9 @@ class AgentRunnerTest {
                 "run-001",
                 "session-001",
                 List.of(AgentMessage.user("Redis Sentinel 是什么？")),
-                maxIterations
+                maxIterations,
+                Set.of("knowledge_search"),
+                Set.of()
         );
     }
 
@@ -131,6 +136,7 @@ class AgentRunnerTest {
         ToolExecutor toolExecutor = new ToolExecutor(
                 new ToolRegistry(tools),
                 new ToolArgumentResolver(objectMapper, VALIDATOR),
+                new DefaultToolPolicyEngine(),
                 objectMapper
         );
         return new AgentRunner(model, toolExecutor);
@@ -142,7 +148,11 @@ class AgentRunnerTest {
         private static final ToolDescriptor<KnowledgeSearchInput> DESCRIPTOR = new ToolDescriptor<>(
                 "knowledge_search",
                 "Search the fake knowledge base",
-                KnowledgeSearchInput.class
+                KnowledgeSearchInput.class,
+                ToolRisk.LOW,
+                true,
+                true,
+                false
         );
 
         @Override
