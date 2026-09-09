@@ -11,7 +11,7 @@ public record AgentRunSpec(
         String sessionId,
         List<AgentMessage> messages,
         int maxIterations,
-        Set<String> allowedTools,
+        Set<String> allowedTools, // 允许调用的工具名称集合
         Set<String> approvedToolCallIds
 ) {
 

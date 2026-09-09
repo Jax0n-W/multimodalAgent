@@ -20,6 +20,11 @@ spring:
     console:
       enabled: true
       path: /h2-console
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
   jpa:
     hibernate:
       ddl-auto: update
