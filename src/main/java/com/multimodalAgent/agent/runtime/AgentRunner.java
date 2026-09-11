@@ -1,5 +1,16 @@
 package com.multimodalAgent.agent.runtime;
 
+import com.multimodalAgent.agent.runtime.event.AgentEventEmitter;
+import com.multimodalAgent.agent.runtime.event.AgentEventPublisher;
+import com.multimodalAgent.agent.runtime.event.ModelCompletedEvent;
+import com.multimodalAgent.agent.runtime.event.ModelFailedEvent;
+import com.multimodalAgent.agent.runtime.event.ModelStartedEvent;
+import com.multimodalAgent.agent.runtime.event.NoopAgentEventPublisher;
+import com.multimodalAgent.agent.runtime.event.RunCompletedEvent;
+import com.multimodalAgent.agent.runtime.event.RunStartedEvent;
+import com.multimodalAgent.agent.runtime.event.RunStoppedEvent;
+import com.multimodalAgent.agent.runtime.event.RunWaitingApprovalEvent;
+import com.multimodalAgent.agent.runtime.event.ToolRequestedEvent;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
@@ -22,14 +33,26 @@ public final class AgentRunner {
 
     private final AgentModel model;
     private final ToolExecutor toolExecutor;
+    private final AgentEventPublisher eventPublisher;
 
     public AgentRunner(AgentModel model, ToolExecutor toolExecutor) {
+        this(model, toolExecutor, NoopAgentEventPublisher.INSTANCE);
+    }
+
+    public AgentRunner(
+            AgentModel model,
+            ToolExecutor toolExecutor,
+            AgentEventPublisher eventPublisher
+    ) {
         this.model = Objects.requireNonNull(model, "model must not be null");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor must not be null");
+        this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher must not be null");
     }
 
     public AgentRunResult run(AgentRunSpec spec) {
         Objects.requireNonNull(spec, "spec must not be null");
+        AgentEventEmitter eventEmitter = new AgentEventEmitter(spec.runId(), eventPublisher);
+        eventEmitter.emit(0, RunStartedEvent::new);
         List<AgentMessage> messages = new ArrayList<>(spec.messages());
         Set<String> toolsUsed = new LinkedHashSet<>();
         TokenUsage totalUsage = TokenUsage.ZERO;
@@ -41,6 +64,7 @@ public final class AgentRunner {
         );
 
         for (int iteration = 1; iteration <= spec.maxIterations(); iteration++) {
+            eventEmitter.emit(iteration, ModelStartedEvent::new);
             ModelTurn turn;
             try {
                 turn = Objects.requireNonNull(
@@ -48,7 +72,11 @@ public final class AgentRunner {
                         "model returned a null turn"
                 );
             } catch (RuntimeException exception) {
-                return stopped(
+                eventEmitter.emit(
+                        iteration,
+                        metadata -> new ModelFailedEvent(metadata, AgentStopReason.MODEL_ERROR)
+                );
+                AgentRunResult result = stopped(
                         AgentStopReason.MODEL_ERROR,
                         iteration,
                         toolsUsed,
@@ -58,12 +86,32 @@ public final class AgentRunner {
                         null,
                         exception.getMessage()
                 );
+                eventEmitter.emit(
+                        iteration,
+                        metadata -> new RunStoppedEvent(
+                                metadata,
+                                AgentStopReason.MODEL_ERROR,
+                                null
+                        )
+                );
+                return result;
             }
 
+            eventEmitter.emit(
+                    iteration,
+                    metadata -> new ModelCompletedEvent(
+                            metadata,
+                            turn.finishReason(),
+                            turn.toolCalls().size(),
+                            turn.tokenUsage().inputTokens(),
+                            turn.tokenUsage().outputTokens(),
+                            turn.tokenUsage().totalTokens()
+                    )
+            );
             totalUsage = totalUsage.plus(turn.tokenUsage());
             if (turn.finishReason() == ModelFinishReason.STOP) {
                 messages.add(AgentMessage.assistant(turn.content()));
-                return new AgentRunResult(
+                AgentRunResult result = new AgentRunResult(
                         turn.content(),
                         AgentStopReason.COMPLETED,
                         iteration,
@@ -74,13 +122,30 @@ public final class AgentRunner {
                         null,
                         null
                 );
+                eventEmitter.emit(iteration, RunCompletedEvent::new);
+                return result;
             }
 
             messages.add(AgentMessage.assistantToolCalls(turn.toolCalls()));
             for (ToolCall toolCall : turn.toolCalls()) {
-                ToolResult result = toolExecutor.execute(toolCall, policyContext);
+                eventEmitter.emit(
+                        iteration,
+                        metadata -> new ToolRequestedEvent(
+                                metadata,
+                                toolCall.id(),
+                                toolCall.name()
+                        )
+                );
+            }
+            for (ToolCall toolCall : turn.toolCalls()) {
+                ToolResult result = toolExecutor.execute(
+                        toolCall,
+                        policyContext,
+                        eventEmitter,
+                        iteration
+                );
                 if (result.policyBlocked()) {
-                    return stopped(
+                    AgentRunResult runResult = stopped(
                             AgentStopReason.POLICY_BLOCKED,
                             iteration,
                             toolsUsed,
@@ -90,9 +155,18 @@ public final class AgentRunner {
                             result.policyDecision(),
                             result.policyDecision().reason()
                     );
+                    eventEmitter.emit(
+                            iteration,
+                            metadata -> new RunStoppedEvent(
+                                    metadata,
+                                    AgentStopReason.POLICY_BLOCKED,
+                                    null
+                            )
+                    );
+                    return runResult;
                 }
                 if (result.approvalRequired()) {
-                    return stopped(
+                    AgentRunResult runResult = stopped(
                             AgentStopReason.WAITING_APPROVAL,
                             iteration,
                             toolsUsed,
@@ -102,6 +176,8 @@ public final class AgentRunner {
                             result.policyDecision(),
                             result.policyDecision().reason()
                     );
+                    eventEmitter.emit(iteration, RunWaitingApprovalEvent::new);
+                    return runResult;
                 }
 
                 messages.add(AgentMessage.toolResult(
@@ -112,7 +188,7 @@ public final class AgentRunner {
                     if (errorCode != ToolErrorCode.TOOL_NOT_FOUND) {
                         toolsUsed.add(toolCall.name());
                     }
-                    return stopped(
+                    AgentRunResult runResult = stopped(
                             AgentStopReason.TOOL_ERROR,
                             iteration,
                             toolsUsed,
@@ -122,12 +198,21 @@ public final class AgentRunner {
                             null,
                             result.error().message()
                     );
+                    eventEmitter.emit(
+                            iteration,
+                            metadata -> new RunStoppedEvent(
+                                    metadata,
+                                    AgentStopReason.TOOL_ERROR,
+                                    errorCode
+                            )
+                    );
+                    return runResult;
                 }
                 toolsUsed.add(toolCall.name());
             }
         }
 
-        return stopped(
+        AgentRunResult result = stopped(
                 AgentStopReason.MAX_ITERATIONS,
                 spec.maxIterations(),
                 toolsUsed,
@@ -137,6 +222,15 @@ public final class AgentRunner {
                 null,
                 "Maximum model iterations reached"
         );
+        eventEmitter.emit(
+                spec.maxIterations(),
+                metadata -> new RunStoppedEvent(
+                        metadata,
+                        AgentStopReason.MAX_ITERATIONS,
+                        null
+                )
+        );
+        return result;
     }
 
     private AgentRunResult stopped(

@@ -2,6 +2,14 @@ package com.multimodalAgent.agent.runtime.tool;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.multimodalAgent.agent.runtime.event.AgentEventEmitter;
+import com.multimodalAgent.agent.runtime.event.NoopAgentEventPublisher;
+import com.multimodalAgent.agent.runtime.event.ToolFailedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolPolicyEvaluatedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolSucceededEvent;
+import com.multimodalAgent.agent.runtime.event.ToolValidatedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolValidationFailedEvent;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyContext;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyDecision;
@@ -31,10 +39,30 @@ public final class ToolExecutor {
     }
 
     public ToolResult execute(ToolCall toolCall, ToolPolicyContext policyContext) {
+        Objects.requireNonNull(policyContext, "policyContext must not be null");
+        return execute(
+                toolCall,
+                policyContext,
+                new AgentEventEmitter(policyContext.runId(), NoopAgentEventPublisher.INSTANCE),
+                1
+        );
+    }
+
+    public ToolResult execute(
+            ToolCall toolCall,
+            ToolPolicyContext policyContext,
+            AgentEventEmitter eventEmitter,
+            int iteration
+    ) {
         Objects.requireNonNull(toolCall, "toolCall must not be null");
         Objects.requireNonNull(policyContext, "policyContext must not be null");
+        Objects.requireNonNull(eventEmitter, "eventEmitter must not be null");
+        if (iteration < 1) {
+            throw new IllegalArgumentException("iteration must be at least 1");
+        }
         AgentTool<?, ?> tool = toolRegistry.find(toolCall.name()).orElse(null);
         if (tool == null) {
+            emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.TOOL_NOT_FOUND);
             return ToolResult.failure(
                     ToolErrorCode.TOOL_NOT_FOUND,
                     "Unknown tool: " + toolCall.name()
@@ -42,10 +70,20 @@ public final class ToolExecutor {
         }
 
         try {
-            return executeTyped(tool, toolCall, policyContext);
+            return executeTyped(tool, toolCall, policyContext, eventEmitter, iteration);
         } catch (ToolValidationException exception) {
+            eventEmitter.emit(
+                    iteration,
+                    metadata -> new ToolValidationFailedEvent(
+                            metadata,
+                            toolCall.id(),
+                            toolCall.name(),
+                            ToolErrorCode.INVALID_ARGUMENTS
+                    )
+            );
             return ToolResult.failure(ToolErrorCode.INVALID_ARGUMENTS, exception.getMessage());
         } catch (RuntimeException exception) {
+            emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.EXECUTION_FAILED);
             return ToolResult.failure(
                     ToolErrorCode.EXECUTION_FAILED,
                     "Tool execution failed: " + tool.name()
@@ -56,9 +94,19 @@ public final class ToolExecutor {
     private <I, O> ToolResult executeTyped(
             AgentTool<I, O> tool,
             ToolCall toolCall,
-            ToolPolicyContext policyContext
+            ToolPolicyContext policyContext,
+            AgentEventEmitter eventEmitter,
+            int iteration
     ) {
         I input = argumentResolver.resolve(toolCall.arguments(), tool.descriptor().inputType());
+        eventEmitter.emit(
+                iteration,
+                metadata -> new ToolValidatedEvent(
+                        metadata,
+                        toolCall.id(),
+                        toolCall.name()
+                )
+        );
         ToolPolicyDecision decision;
         try {
             decision = Objects.requireNonNull(
@@ -71,10 +119,18 @@ public final class ToolExecutor {
                     "policy engine returned a null decision"
             );
         } catch (RuntimeException exception) {
-            return ToolResult.policyBlocked(
-                    ToolPolicyDecision.deny("Tool policy evaluation failed")
-            );
+            decision = ToolPolicyDecision.deny("Tool policy evaluation failed");
         }
+        ToolPolicyDecision evaluatedDecision = decision;
+        eventEmitter.emit(
+                iteration,
+                metadata -> new ToolPolicyEvaluatedEvent(
+                        metadata,
+                        toolCall.id(),
+                        toolCall.name(),
+                        evaluatedDecision.type()
+                )
+        );
 
         if (decision.type() == ToolPolicyDecisionType.DENY) {
             return ToolResult.policyBlocked(decision);
@@ -83,8 +139,42 @@ public final class ToolExecutor {
             return ToolResult.approvalRequired(decision);
         }
 
+        eventEmitter.emit(
+                iteration,
+                metadata -> new ToolStartedEvent(
+                        metadata,
+                        toolCall.id(),
+                        toolCall.name()
+                )
+        );
         O output = tool.execute(input);
-        return ToolResult.success(serialize(output), decision);
+        String serializedOutput = serialize(output);
+        eventEmitter.emit(
+                iteration,
+                metadata -> new ToolSucceededEvent(
+                        metadata,
+                        toolCall.id(),
+                        toolCall.name()
+                )
+        );
+        return ToolResult.success(serializedOutput, decision);
+    }
+
+    private void emitToolFailed(
+            AgentEventEmitter eventEmitter,
+            int iteration,
+            ToolCall toolCall,
+            ToolErrorCode errorCode
+    ) {
+        eventEmitter.emit(
+                iteration,
+                metadata -> new ToolFailedEvent(
+                        metadata,
+                        toolCall.id(),
+                        toolCall.name(),
+                        errorCode
+                )
+        );
     }
 
     private String serialize(Object output) {

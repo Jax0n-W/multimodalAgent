@@ -1,0 +1,18 @@
+package com.multimodalAgent.agent.runtime.event;
+
+public enum AgentEventType {
+    RUN_STARTED,
+    MODEL_STARTED,
+    MODEL_COMPLETED,
+    MODEL_FAILED,
+    TOOL_REQUESTED,
+    TOOL_VALIDATED,
+    TOOL_VALIDATION_FAILED,
+    TOOL_POLICY_EVALUATED,
+    TOOL_STARTED,
+    TOOL_SUCCEEDED,
+    TOOL_FAILED,
+    RUN_WAITING_APPROVAL,
+    RUN_COMPLETED,
+    RUN_STOPPED
+}
