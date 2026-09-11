@@ -7,5 +7,5 @@ import java.util.List;
 
 public interface AgentStepRepository extends JpaRepository<AgentStepEntity, Long> {
 
-    List<AgentStepEntity> findByRunIdOrderByIterationAscIdAsc(String runId);
+    List<AgentStepEntity> findByRunIdOrderByStepIndexAsc(String runId);
 }

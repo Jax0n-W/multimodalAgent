@@ -3,6 +3,7 @@ package com.multimodalAgent.agent.runtime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentMessageRole;
+import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
@@ -112,6 +113,30 @@ class AgentRunnerTest {
         assertEquals(List.of("knowledge_search"), result.toolsUsed());
     }
 
+    @Test
+    void shouldReturnModelErrorWhenModelThrows() {
+        AgentModel model = messages -> {
+            throw new IllegalStateException("model unavailable");
+        };
+
+        AgentRunResult result = runner(model, List.of()).run(spec(3));
+
+        assertEquals(AgentStopReason.MODEL_ERROR, result.stopReason());
+        assertEquals(1, result.iterations());
+        assertEquals("model unavailable", result.errorMessage());
+    }
+
+    @Test
+    void shouldReturnToolErrorWhenRegisteredToolThrows() {
+        ScriptedAgentModel model = new ScriptedAgentModel(knowledgeSearchCall("call-failing"));
+
+        AgentRunResult result = runner(model, List.of(new ThrowingKnowledgeSearchTool())).run(spec(3));
+
+        assertEquals(AgentStopReason.TOOL_ERROR, result.stopReason());
+        assertEquals(ToolErrorCode.EXECUTION_FAILED, result.toolErrorCode());
+        assertEquals(1, result.iterations());
+    }
+
     private AgentRunSpec spec(int maxIterations) {
         return new AgentRunSpec(
                 "run-001",
@@ -131,7 +156,7 @@ class AgentRunnerTest {
         ));
     }
 
-    private AgentRunner runner(ScriptedAgentModel model, List<? extends AgentTool<?, ?>> tools) {
+    private AgentRunner runner(AgentModel model, List<? extends AgentTool<?, ?>> tools) {
         ObjectMapper objectMapper = new ObjectMapper();
         ToolExecutor toolExecutor = new ToolExecutor(
                 new ToolRegistry(tools),
@@ -163,6 +188,20 @@ class AgentRunnerTest {
         @Override
         public String execute(KnowledgeSearchInput input) {
             return "Redis Sentinel provides automatic failover.";
+        }
+    }
+
+    private static final class ThrowingKnowledgeSearchTool
+            implements AgentTool<KnowledgeSearchInput, String> {
+
+        @Override
+        public ToolDescriptor<KnowledgeSearchInput> descriptor() {
+            return FakeKnowledgeSearchTool.DESCRIPTOR;
+        }
+
+        @Override
+        public String execute(KnowledgeSearchInput input) {
+            throw new IllegalStateException("tool unavailable");
         }
     }
 }

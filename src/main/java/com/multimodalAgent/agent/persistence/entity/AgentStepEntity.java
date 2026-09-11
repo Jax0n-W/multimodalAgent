@@ -32,6 +32,9 @@ public class AgentStepEntity {
     @Column(nullable = false)
     private int iteration;
 
+    @Column(name = "step_index", nullable = false)
+    private int stepIndex;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "step_type", nullable = false, length = 32)
     private AgentStepType stepType;
@@ -62,15 +65,20 @@ public class AgentStepEntity {
             String stepId,
             String runId,
             int iteration,
+            int stepIndex,
             AgentStepType stepType,
             AgentStepStatus status
     ) {
         if (iteration < 1) {
             throw new IllegalArgumentException("iteration must be at least 1");
         }
+        if (stepIndex < 1) {
+            throw new IllegalArgumentException("stepIndex must be at least 1");
+        }
         this.stepId = Objects.requireNonNull(stepId, "stepId must not be null");
         this.runId = Objects.requireNonNull(runId, "runId must not be null");
         this.iteration = iteration;
+        this.stepIndex = stepIndex;
         this.stepType = Objects.requireNonNull(stepType, "stepType must not be null");
         this.status = Objects.requireNonNull(status, "status must not be null");
     }
@@ -96,6 +104,10 @@ public class AgentStepEntity {
 
     public int getIteration() {
         return iteration;
+    }
+
+    public int getStepIndex() {
+        return stepIndex;
     }
 
     public AgentStepType getStepType() {

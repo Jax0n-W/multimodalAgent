@@ -5,5 +5,7 @@ public enum ToolExecutionStatus {
     STARTED,
     SUCCEEDED,
     FAILED,
-    UNKNOWN
+    UNKNOWN,
+    BLOCKED,
+    CANCELLED
 }

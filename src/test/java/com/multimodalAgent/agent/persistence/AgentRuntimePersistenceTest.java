@@ -11,13 +11,17 @@ import com.multimodalAgent.agent.persistence.model.ToolExecutionStatus;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentStepRepository;
 import com.multimodalAgent.agent.persistence.repository.ToolExecutionRepository;
+import com.multimodalAgent.agent.runtime.AgentStopReason;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -75,6 +79,7 @@ class AgentRuntimePersistenceTest {
         run.setModelVersion("gpt-4o-mini-2026-09");
         run.setPromptVersion("prompt-v1");
         run.setSkillVersion("skills-v1");
+        run.setCurrentIteration(2);
         run.setStartedAt(Instant.parse("2026-09-09T08:00:00Z"));
         agentRunRepository.saveAndFlush(run);
         entityManager.clear();
@@ -85,6 +90,8 @@ class AgentRuntimePersistenceTest {
         assertEquals("run-save", agentRunRepository.findByRequestId("request-save").orElseThrow().getRunId());
         assertEquals(1, agentRunRepository.findBySessionIdOrderByCreatedAtDesc("session-save").size());
         assertEquals("session-save", restored.getSessionId());
+        assertEquals(1001L, restored.getUserId());
+        assertEquals(2, restored.getCurrentIteration());
         assertEquals(AgentRunStatus.RUNNING, restored.getStatus());
         assertEquals(AgentRunPhase.MODEL_RUNNING, restored.getPhase());
         assertEquals("gpt-4o-mini-2026-09", restored.getModelVersion());
@@ -99,20 +106,21 @@ class AgentRuntimePersistenceTest {
     void shouldAssociateMultipleOrderedStepsWithOneRun() {
         agentRunRepository.saveAndFlush(newRun("run-steps", "request-steps", "session-steps"));
         agentStepRepository.saveAndFlush(new AgentStepEntity(
-                "step-model-1", "run-steps", 1, AgentStepType.MODEL, AgentStepStatus.SUCCEEDED
+                "step-model-2", "run-steps", 2, 3, AgentStepType.MODEL, AgentStepStatus.SUCCEEDED
         ));
         agentStepRepository.saveAndFlush(new AgentStepEntity(
-                "step-tool-1", "run-steps", 1, AgentStepType.TOOL, AgentStepStatus.SUCCEEDED
+                "step-model-1", "run-steps", 1, 1, AgentStepType.MODEL, AgentStepStatus.SUCCEEDED
         ));
         agentStepRepository.saveAndFlush(new AgentStepEntity(
-                "step-model-2", "run-steps", 2, AgentStepType.MODEL, AgentStepStatus.SUCCEEDED
+                "step-tool-1", "run-steps", 1, 2, AgentStepType.TOOL, AgentStepStatus.SUCCEEDED
         ));
         entityManager.clear();
 
         List<AgentStepEntity> steps =
-                agentStepRepository.findByRunIdOrderByIterationAscIdAsc("run-steps");
+                agentStepRepository.findByRunIdOrderByStepIndexAsc("run-steps");
 
         assertEquals(3, steps.size());
+        assertEquals(List.of(1, 2, 3), steps.stream().map(AgentStepEntity::getStepIndex).toList());
         assertEquals(List.of(1, 1, 2), steps.stream().map(AgentStepEntity::getIteration).toList());
         assertEquals(List.of(AgentStepType.MODEL, AgentStepType.TOOL, AgentStepType.MODEL),
                 steps.stream().map(AgentStepEntity::getStepType).toList());
@@ -124,7 +132,7 @@ class AgentRuntimePersistenceTest {
     void shouldAssociateToolExecutionWithRunStepAndToolCall() {
         agentRunRepository.saveAndFlush(newRun("run-tool", "request-tool", "session-tool"));
         agentStepRepository.saveAndFlush(new AgentStepEntity(
-                "step-tool", "run-tool", 1, AgentStepType.TOOL, AgentStepStatus.RUNNING
+                "step-tool", "run-tool", 1, 1, AgentStepType.TOOL, AgentStepStatus.RUNNING
         ));
         ToolExecutionEntity execution = new ToolExecutionEntity(
                 "execution-1",
@@ -158,7 +166,7 @@ class AgentRuntimePersistenceTest {
     void shouldPersistEnumsAsStringsIncludingUnknownToolOutcome() {
         agentRunRepository.saveAndFlush(newRun("run-enum", "request-enum", "session-enum"));
         agentStepRepository.saveAndFlush(new AgentStepEntity(
-                "step-enum", "run-enum", 1, AgentStepType.TOOL, AgentStepStatus.RUNNING
+                "step-enum", "run-enum", 1, 1, AgentStepType.TOOL, AgentStepStatus.RUNNING
         ));
         toolExecutionRepository.saveAndFlush(new ToolExecutionEntity(
                 "execution-unknown",
@@ -192,6 +200,111 @@ class AgentRuntimePersistenceTest {
     }
 
     @Test
+    void shouldPersistBlockedAndCancelledToolStatusesAsStrings() {
+        agentRunRepository.saveAndFlush(newRun("run-tool-status", "request-tool-status", "session-tool-status"));
+        agentStepRepository.saveAndFlush(new AgentStepEntity(
+                "step-tool-status", "run-tool-status", 1, 1, AgentStepType.TOOL, AgentStepStatus.RUNNING
+        ));
+        toolExecutionRepository.saveAndFlush(new ToolExecutionEntity(
+                "execution-blocked", "run-tool-status", "step-tool-status", "call-blocked",
+                "appointment_create", ToolExecutionStatus.BLOCKED
+        ));
+        toolExecutionRepository.saveAndFlush(new ToolExecutionEntity(
+                "execution-cancelled", "run-tool-status", "step-tool-status", "call-cancelled",
+                "appointment_create", ToolExecutionStatus.CANCELLED
+        ));
+        entityManager.clear();
+
+        assertEquals("BLOCKED", jdbcTemplate.queryForObject(
+                "SELECT status FROM tool_executions WHERE execution_id = 'execution-blocked'", String.class));
+        assertEquals("CANCELLED", jdbcTemplate.queryForObject(
+                "SELECT status FROM tool_executions WHERE execution_id = 'execution-cancelled'", String.class));
+    }
+
+    @Test
+    void shouldPersistNewStopReasonsAsStrings() {
+        List<AgentStopReason> reasons = List.of(
+                AgentStopReason.MODEL_TIMEOUT,
+                AgentStopReason.CANCELLED,
+                AgentStopReason.INTERNAL_ERROR
+        );
+        for (int index = 0; index < reasons.size(); index++) {
+            AgentRunEntity run = newRun(
+                    "run-stop-" + index,
+                    "request-stop-" + index,
+                    "session-stop-" + index
+            );
+            run.setStopReason(reasons.get(index));
+            agentRunRepository.saveAndFlush(run);
+        }
+        entityManager.clear();
+
+        for (int index = 0; index < reasons.size(); index++) {
+            assertEquals(reasons.get(index).name(), jdbcTemplate.queryForObject(
+                    "SELECT stop_reason FROM agent_runs WHERE run_id = ?",
+                    String.class,
+                    "run-stop-" + index
+            ));
+        }
+    }
+
+    @Test
+    void shouldRejectDuplicateStepIndexWithinTheSameRunButAllowItAcrossRuns() {
+        agentRunRepository.saveAndFlush(newRun("run-step-a", "request-step-a", "session-step-a"));
+        agentRunRepository.saveAndFlush(newRun("run-step-b", "request-step-b", "session-step-b"));
+        agentStepRepository.saveAndFlush(new AgentStepEntity(
+                "step-a-1", "run-step-a", 1, 1, AgentStepType.MODEL, AgentStepStatus.SUCCEEDED
+        ));
+        agentStepRepository.saveAndFlush(new AgentStepEntity(
+                "step-b-1", "run-step-b", 1, 1, AgentStepType.MODEL, AgentStepStatus.SUCCEEDED
+        ));
+
+        assertThrows(DataIntegrityViolationException.class, () ->
+                agentStepRepository.saveAndFlush(new AgentStepEntity(
+                        "step-a-duplicate", "run-step-a", 2, 1,
+                        AgentStepType.MODEL, AgentStepStatus.SUCCEEDED
+                ))
+        );
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void shouldRejectStaleAgentRunUpdate() {
+        agentRunRepository.saveAndFlush(newRun("run-lock", "request-lock", "session-lock"));
+        AgentRunEntity firstWriter = agentRunRepository.findByRunId("run-lock").orElseThrow();
+        AgentRunEntity staleWriter = agentRunRepository.findByRunId("run-lock").orElseThrow();
+
+        firstWriter.setCurrentIteration(1);
+        agentRunRepository.saveAndFlush(firstWriter);
+        staleWriter.setCurrentIteration(2);
+
+        assertThrows(ObjectOptimisticLockingFailureException.class,
+                () -> agentRunRepository.saveAndFlush(staleWriter));
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void shouldRejectStaleToolExecutionUpdate() {
+        agentRunRepository.saveAndFlush(newRun("run-tool-lock", "request-tool-lock", "session-tool-lock"));
+        agentStepRepository.saveAndFlush(new AgentStepEntity(
+                "step-tool-lock", "run-tool-lock", 1, 1, AgentStepType.TOOL, AgentStepStatus.RUNNING
+        ));
+        toolExecutionRepository.saveAndFlush(new ToolExecutionEntity(
+                "execution-lock", "run-tool-lock", "step-tool-lock", "call-lock",
+                "appointment_create", ToolExecutionStatus.STARTED
+        ));
+        ToolExecutionEntity firstWriter = toolExecutionRepository.findByToolCallId("call-lock").get(0);
+        ToolExecutionEntity staleWriter = toolExecutionRepository.findByToolCallId("call-lock").get(0);
+
+        firstWriter.setStatus(ToolExecutionStatus.SUCCEEDED);
+        toolExecutionRepository.saveAndFlush(firstWriter);
+        staleWriter.setStatus(ToolExecutionStatus.UNKNOWN);
+
+        assertThrows(ObjectOptimisticLockingFailureException.class,
+                () -> toolExecutionRepository.saveAndFlush(staleWriter));
+    }
+
+    @Test
     void shouldRejectDuplicateRunId() {
         agentRunRepository.saveAndFlush(newRun("run-duplicate", "request-first", "session-duplicate"));
 
@@ -217,6 +330,7 @@ class AgentRuntimePersistenceTest {
         return new AgentRunEntity(
                 runId,
                 requestId,
+                1001L,
                 sessionId,
                 AgentRunStatus.RUNNING,
                 AgentRunPhase.MODEL_RUNNING

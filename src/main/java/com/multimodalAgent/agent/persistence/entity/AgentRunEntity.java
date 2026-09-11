@@ -13,6 +13,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -30,6 +31,9 @@ public class AgentRunEntity {
 
     @Column(name = "request_id", nullable = false, updatable = false, length = 128)
     private String requestId;
+
+    @Column(name = "user_id", nullable = false, updatable = false)
+    private Long userId;
 
     @Column(name = "session_id", nullable = false, updatable = false, length = 64)
     private String sessionId;
@@ -51,6 +55,9 @@ public class AgentRunEntity {
     @Column(name = "skill_version", length = 120)
     private String skillVersion;
 
+    @Column(name = "current_iteration", nullable = false)
+    private int currentIteration;
+
     @Column(name = "started_at")
     private Instant startedAt;
 
@@ -70,18 +77,24 @@ public class AgentRunEntity {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    @Version
+    @Column(nullable = false)
+    private Long version;
+
     protected AgentRunEntity() {
     }
 
     public AgentRunEntity(
             String runId,
             String requestId,
+            Long userId,
             String sessionId,
             AgentRunStatus status,
             AgentRunPhase phase
     ) {
         this.runId = Objects.requireNonNull(runId, "runId must not be null");
         this.requestId = Objects.requireNonNull(requestId, "requestId must not be null");
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId must not be null");
         this.status = Objects.requireNonNull(status, "status must not be null");
         this.phase = Objects.requireNonNull(phase, "phase must not be null");
@@ -113,6 +126,10 @@ public class AgentRunEntity {
 
     public String getRequestId() {
         return requestId;
+    }
+
+    public Long getUserId() {
+        return userId;
     }
 
     public String getSessionId() {
@@ -159,6 +176,17 @@ public class AgentRunEntity {
         this.skillVersion = skillVersion;
     }
 
+    public int getCurrentIteration() {
+        return currentIteration;
+    }
+
+    public void setCurrentIteration(int currentIteration) {
+        if (currentIteration < 0) {
+            throw new IllegalArgumentException("currentIteration must not be negative");
+        }
+        this.currentIteration = currentIteration;
+    }
+
     public Instant getStartedAt() {
         return startedAt;
     }
@@ -197,5 +225,9 @@ public class AgentRunEntity {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public Long getVersion() {
+        return version;
     }
 }
