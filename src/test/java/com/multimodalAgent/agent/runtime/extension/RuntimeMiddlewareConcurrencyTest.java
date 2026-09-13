@@ -9,6 +9,7 @@ import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
+import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
@@ -25,10 +26,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RuntimeMiddlewareConcurrencyTest {
 
@@ -105,6 +109,45 @@ class RuntimeMiddlewareConcurrencyTest {
         assertEquals(2L, contextB.userId());
     }
 
+    @Test
+    void shouldRejectCapturedNextFromAnotherThreadAfterInvocationEnds() throws Exception {
+        AtomicReference<RuntimeInvocation<AgentRunResult>> captured = new AtomicReference<>();
+        AtomicInteger coreCalls = new AtomicInteger();
+        RuntimeMiddleware middleware = new RuntimeMiddleware() {
+            @Override
+            public AgentRunResult aroundRun(
+                    AgentRuntimeContext context,
+                    RuntimeInvocation<AgentRunResult> next
+            ) {
+                captured.set(next);
+                return next.proceed();
+            }
+        };
+        RuntimeMiddlewareChain chain = new RuntimeMiddlewareChain(List.of(middleware));
+        chain.aroundRun(
+                AgentRuntimeContext.minimal("run-late", "session-late"),
+                () -> {
+                    coreCalls.incrementAndGet();
+                    return completedResult();
+                }
+        );
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+
+        try {
+            Future<RuntimeMiddlewareFailureException> failure = executorService.submit(() ->
+                    assertThrows(
+                            RuntimeMiddlewareFailureException.class,
+                            () -> captured.get().proceed()
+                    ));
+
+            failure.get(10, TimeUnit.SECONDS);
+        } finally {
+            executorService.shutdownNow();
+        }
+
+        assertEquals(1, coreCalls.get());
+    }
+
     private static AgentExecutionRequest request(
             String runId,
             String requestId,
@@ -122,6 +165,20 @@ class RuntimeMiddlewareConcurrencyTest {
                 ),
                 requestId,
                 userId
+        );
+    }
+
+    private static AgentRunResult completedResult() {
+        return new AgentRunResult(
+                "done",
+                AgentStopReason.COMPLETED,
+                1,
+                List.of(),
+                List.of(),
+                TokenUsage.ZERO,
+                null,
+                null,
+                null
         );
     }
 

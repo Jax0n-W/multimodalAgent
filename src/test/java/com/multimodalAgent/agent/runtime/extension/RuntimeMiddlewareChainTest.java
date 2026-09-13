@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -253,6 +254,78 @@ class RuntimeMiddlewareChainTest {
         );
 
         assertSame(middlewareFailure, thrown.getCause());
+    }
+
+    @Test
+    void shouldCloseCapturedNextWhenMiddlewareReturnsWithoutProceeding() {
+        AtomicReference<RuntimeInvocation<AgentRunResult>> captured = new AtomicReference<>();
+        AtomicInteger coreCalls = new AtomicInteger();
+        RuntimeMiddleware middleware = new RuntimeMiddleware() {
+            @Override
+            public AgentRunResult aroundRun(
+                    AgentRuntimeContext context,
+                    RuntimeInvocation<AgentRunResult> next
+            ) {
+                captured.set(next);
+                return runResult();
+            }
+        };
+
+        assertThrows(RuntimeMiddlewareFailureException.class, () ->
+                new RuntimeMiddlewareChain(List.of(middleware)).aroundRun(CONTEXT, () -> {
+                    coreCalls.incrementAndGet();
+                    return runResult();
+                }));
+        assertThrows(RuntimeMiddlewareFailureException.class, () -> captured.get().proceed());
+        assertEquals(0, coreCalls.get());
+    }
+
+    @Test
+    void shouldCloseCapturedNextAfterSuccessfulMiddlewareInvocation() {
+        AtomicReference<RuntimeInvocation<AgentRunResult>> captured = new AtomicReference<>();
+        AtomicInteger coreCalls = new AtomicInteger();
+        RuntimeMiddleware middleware = new RuntimeMiddleware() {
+            @Override
+            public AgentRunResult aroundRun(
+                    AgentRuntimeContext context,
+                    RuntimeInvocation<AgentRunResult> next
+            ) {
+                captured.set(next);
+                return next.proceed();
+            }
+        };
+
+        new RuntimeMiddlewareChain(List.of(middleware)).aroundRun(CONTEXT, () -> {
+            coreCalls.incrementAndGet();
+            return runResult();
+        });
+
+        assertThrows(RuntimeMiddlewareFailureException.class, () -> captured.get().proceed());
+        assertEquals(1, coreCalls.get());
+    }
+
+    @Test
+    void shouldCloseCapturedNextWhenMiddlewareThrows() {
+        AtomicReference<RuntimeInvocation<AgentRunResult>> captured = new AtomicReference<>();
+        AtomicInteger coreCalls = new AtomicInteger();
+        RuntimeMiddleware middleware = new RuntimeMiddleware() {
+            @Override
+            public AgentRunResult aroundRun(
+                    AgentRuntimeContext context,
+                    RuntimeInvocation<AgentRunResult> next
+            ) {
+                captured.set(next);
+                throw new IllegalStateException("middleware failed");
+            }
+        };
+
+        assertThrows(RuntimeMiddlewareFailureException.class, () ->
+                new RuntimeMiddlewareChain(List.of(middleware)).aroundRun(CONTEXT, () -> {
+                    coreCalls.incrementAndGet();
+                    return runResult();
+                }));
+        assertThrows(RuntimeMiddlewareFailureException.class, () -> captured.get().proceed());
+        assertEquals(0, coreCalls.get());
     }
 
     private RuntimeMiddlewareChain orderedChain(List<String> calls) {

@@ -9,8 +9,10 @@ import com.multimodalAgent.agent.runtime.tool.ToolResult;
  *
  * <p>Implementations must call {@code next.proceed()} exactly once and return the exact result
  * instance produced by downstream execution. Middleware must not short-circuit, replace results,
- * or change core execution semantics. It is intended for concerns such as metrics, tracing,
- * logging, latency or token observation, and runtime-context enrichment.</p>
+ * retain or transfer {@code next}, or change core execution semantics. The {@code next} capability
+ * is valid only in the dynamic scope and on the thread of its middleware invocation. It is intended
+ * for concerns such as metrics, tracing, logging, latency or token observation, and runtime-context
+ * enrichment.</p>
  *
  * <p>Request rejection, idempotency, locking, admission control, rate limiting, cancellation
  * prechecks, and cached-result short-circuiting belong to a future execution guard/preflight

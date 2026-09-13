@@ -139,6 +139,8 @@ public final class RuntimeMiddlewareChain {
                     operationName + " middleware failed",
                     exception
             );
+        } finally {
+            guard.close();
         }
     }
 
@@ -151,15 +153,28 @@ public final class RuntimeMiddlewareChain {
     private static final class ProceedOnceGuard<T> {
 
         private final RuntimeInvocation<T> downstream;
+        private final Thread invocationThread;
         private int invocationCount;
         private T downstreamResult;
         private RuntimeException downstreamFailure;
+        private boolean closed;
 
         private ProceedOnceGuard(RuntimeInvocation<T> downstream) {
             this.downstream = downstream;
+            this.invocationThread = Thread.currentThread();
         }
 
         private synchronized T proceed() {
+            if (closed) {
+                throw new RuntimeMiddlewareFailureException(
+                        "next.proceed() is no longer valid outside its middleware invocation"
+                );
+            }
+            if (Thread.currentThread() != invocationThread) {
+                throw new RuntimeMiddlewareFailureException(
+                        "next.proceed() must run synchronously on its middleware invocation thread"
+                );
+            }
             invocationCount++;
             if (invocationCount != 1) {
                 throw new RuntimeMiddlewareFailureException(
@@ -193,6 +208,10 @@ public final class RuntimeMiddlewareChain {
 
         private synchronized RuntimeException downstreamFailure() {
             return downstreamFailure;
+        }
+
+        private synchronized void close() {
+            closed = true;
         }
     }
 

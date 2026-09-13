@@ -17,6 +17,11 @@ or rewriting core facts after they occur.
 instance. It cannot short-circuit, replace results, or change Agent core semantics. Metrics, tracing,
 logging, latency/token observation, and context enrichment fit this boundary.
 
+The `next` capability is synchronous and valid only within the dynamic scope and thread of the
+corresponding middleware invocation. The extension kernel closes it whenever the middleware returns,
+validation fails, or an exception leaves the invocation. A retained or cross-thread `next` cannot
+start downstream work after that boundary.
+
 Request idempotency, session-lock rejection, admission control, rate-limit rejection, cancellation
 prechecks, and cached-result returns require a future Execution Guard / Preflight boundary. They do
 not belong in transparent middleware.
