@@ -21,6 +21,7 @@ import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyDecisionType;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyEngine;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyRequest;
 
+import java.util.List;
 import java.util.Objects;
 
 public final class ToolExecutor {
@@ -52,6 +53,10 @@ public final class ToolExecutor {
                 AgentRuntimeContext.minimal(policyContext.runId(), policyContext.sessionId()),
                 RuntimeMiddlewareChain.empty()
         );
+    }
+
+    public List<ToolDescriptor<?>> toolDescriptors() {
+        return toolRegistry.descriptors();
     }
 
     public ToolResult execute(

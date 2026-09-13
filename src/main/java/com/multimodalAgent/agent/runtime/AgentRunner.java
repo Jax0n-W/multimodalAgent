@@ -17,7 +17,10 @@ import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareFailureExcep
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
+import com.multimodalAgent.agent.runtime.model.AgentModelRequest;
 import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
+import com.multimodalAgent.agent.runtime.model.ModelToolDefinition;
+import com.multimodalAgent.agent.runtime.model.ModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
@@ -37,19 +40,29 @@ public final class AgentRunner {
 
     private final AgentModel model;
     private final ToolExecutor toolExecutor;
+    private final ModelToolDefinitionProjector toolDefinitionProjector;
     private final AgentEventPublisher eventPublisher;
 
-    public AgentRunner(AgentModel model, ToolExecutor toolExecutor) {
-        this(model, toolExecutor, NoopAgentEventPublisher.INSTANCE);
+    public AgentRunner(
+            AgentModel model,
+            ToolExecutor toolExecutor,
+            ModelToolDefinitionProjector toolDefinitionProjector
+    ) {
+        this(model, toolExecutor, toolDefinitionProjector, NoopAgentEventPublisher.INSTANCE);
     }
 
     public AgentRunner(
             AgentModel model,
             ToolExecutor toolExecutor,
+            ModelToolDefinitionProjector toolDefinitionProjector,
             AgentEventPublisher eventPublisher
     ) {
         this.model = Objects.requireNonNull(model, "model must not be null");
         this.toolExecutor = Objects.requireNonNull(toolExecutor, "toolExecutor must not be null");
+        this.toolDefinitionProjector = Objects.requireNonNull(
+                toolDefinitionProjector,
+                "toolDefinitionProjector must not be null"
+        );
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher must not be null");
     }
 
@@ -100,7 +113,8 @@ public final class AgentRunner {
                                 eventEmitter,
                                 currentIteration,
                                 invocationState,
-                                seenToolCallIds
+                                seenToolCallIds,
+                                spec.allowedTools()
                         )
                 );
             } catch (RuntimeMiddlewareFailureException exception) {
@@ -284,13 +298,17 @@ public final class AgentRunner {
             AgentEventEmitter eventEmitter,
             int iteration,
             ModelInvocationState invocationState,
-            Set<String> seenToolCallIds
+            Set<String> seenToolCallIds,
+            Set<String> allowedTools
     ) {
         invocationState.started = true;
         eventEmitter.emit(iteration, ModelStartedEvent::new);
         try {
             ModelTurn turn = Objects.requireNonNull(
-                    model.generate(List.copyOf(messages)),
+                    model.generate(new AgentModelRequest(
+                            messages,
+                            visibleToolDefinitions(allowedTools)
+                    )),
                     "model returned a null turn"
             );
             validateUniqueToolCallIds(turn, seenToolCallIds);
@@ -314,6 +332,13 @@ public final class AgentRunner {
             );
             throw exception;
         }
+    }
+
+    private List<ModelToolDefinition> visibleToolDefinitions(Set<String> allowedTools) {
+        return toolExecutor.toolDescriptors().stream()
+                .filter(descriptor -> allowedTools.contains(descriptor.name()))
+                .map(toolDefinitionProjector::project)
+                .toList();
     }
 
     private void validateUniqueToolCallIds(ModelTurn turn, Set<String> seenToolCallIds) {

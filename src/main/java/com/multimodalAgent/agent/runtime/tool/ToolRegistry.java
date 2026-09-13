@@ -1,6 +1,7 @@
 package com.multimodalAgent.agent.runtime.tool;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,7 +25,7 @@ public final class ToolRegistry {
                 throw new IllegalArgumentException("Duplicate tool name: " + descriptor.name());
             }
         }
-        this.tools = Map.copyOf(registered);
+        this.tools = Collections.unmodifiableMap(new LinkedHashMap<>(registered));
     }
 
     public Optional<AgentTool<?, ?>> find(String name) {

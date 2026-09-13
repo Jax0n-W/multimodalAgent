@@ -9,6 +9,7 @@ import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
+import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
@@ -79,7 +80,11 @@ class RuntimeMiddlewareConcurrencyTest {
                 objectMapper
         );
         AgentExecutionCoordinator coordinator = new AgentExecutionCoordinator(
-                new AgentRunner(messages -> ModelTurn.finalAnswer("done"), toolExecutor),
+                new AgentRunner(
+                        request -> ModelTurn.finalAnswer("done"),
+                        toolExecutor,
+                        TestModelToolDefinitionProjector.INSTANCE
+                ),
                 sharedChain
         );
         ExecutorService executorService = Executors.newFixedThreadPool(2);

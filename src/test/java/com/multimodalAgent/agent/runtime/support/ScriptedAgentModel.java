@@ -1,7 +1,8 @@
 package com.multimodalAgent.agent.runtime.support;
 
-import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
+import com.multimodalAgent.agent.runtime.model.AgentModelRequest;
+import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 
 import java.util.ArrayDeque;
@@ -13,7 +14,7 @@ import java.util.List;
 public final class ScriptedAgentModel implements AgentModel {
 
     private final Deque<ModelTurn> turns;
-    private final List<List<AgentMessage>> requests = new ArrayList<>();
+    private final List<AgentModelRequest> requests = new ArrayList<>();
 
     public ScriptedAgentModel(ModelTurn... turns) {
         if (turns == null || turns.length == 0) {
@@ -23,8 +24,8 @@ public final class ScriptedAgentModel implements AgentModel {
     }
 
     @Override
-    public ModelTurn generate(List<AgentMessage> messages) {
-        requests.add(List.copyOf(messages));
+    public ModelTurn generate(AgentModelRequest request) {
+        requests.add(request);
         ModelTurn turn = turns.pollFirst();
         if (turn == null) {
             throw new IllegalStateException("No scripted model turn remains");
@@ -33,6 +34,10 @@ public final class ScriptedAgentModel implements AgentModel {
     }
 
     public List<List<AgentMessage>> requests() {
-        return requests.stream().map(List::copyOf).toList();
+        return requests.stream().map(AgentModelRequest::messages).toList();
+    }
+
+    public List<AgentModelRequest> modelRequests() {
+        return List.copyOf(requests);
     }
 }

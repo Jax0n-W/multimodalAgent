@@ -9,6 +9,7 @@ import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
+import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
@@ -214,7 +215,12 @@ class MultiToolCallEventTest {
                 objectMapper
         );
         RecordingAgentEventPublisher publisher = new RecordingAgentEventPublisher();
-        AgentRunResult result = new AgentRunner(model, executor, publisher).run(new AgentRunSpec(
+        AgentRunResult result = new AgentRunner(
+                model,
+                executor,
+                TestModelToolDefinitionProjector.INSTANCE,
+                publisher
+        ).run(new AgentRunSpec(
                 "run-multi",
                 "session-multi",
                 List.of(AgentMessage.user("run tools")),

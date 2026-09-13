@@ -7,8 +7,10 @@ import com.multimodalAgent.agent.runtime.event.RecordingAgentEventPublisher;
 import com.multimodalAgent.agent.runtime.event.RunStoppedEvent;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
+import com.multimodalAgent.agent.runtime.model.AgentModelRequest;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
+import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
@@ -60,7 +62,12 @@ class AgentRunnerIterationSemanticsTest {
                 new DefaultToolPolicyEngine(),
                 objectMapper
         );
-        AgentRunner runner = new AgentRunner(model, executor, publisher);
+        AgentRunner runner = new AgentRunner(
+                model,
+                executor,
+                TestModelToolDefinitionProjector.INSTANCE,
+                publisher
+        );
 
         AgentRunResult result = runner.run(new AgentRunSpec(
                 "run-max-" + maxIterations,
@@ -94,7 +101,7 @@ class AgentRunnerIterationSemanticsTest {
         private int invocations;
 
         @Override
-        public ModelTurn generate(List<AgentMessage> messages) {
+        public ModelTurn generate(AgentModelRequest request) {
             invocations++;
             return ModelTurn.toolCall(new ToolCall(
                     "call-" + invocations,

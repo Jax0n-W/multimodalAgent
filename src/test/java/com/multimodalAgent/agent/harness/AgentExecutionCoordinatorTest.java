@@ -15,6 +15,7 @@ import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
+import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
@@ -96,7 +97,7 @@ class AgentExecutionCoordinatorTest {
                 objectMapper
         );
         AgentExecutionCoordinator coordinator = new AgentExecutionCoordinator(
-                new AgentRunner(model, executor),
+                new AgentRunner(model, executor, TestModelToolDefinitionProjector.INSTANCE),
                 new RuntimeMiddlewareChain(List.of(capturing))
         );
         AgentExecutionRequest request = new AgentExecutionRequest(

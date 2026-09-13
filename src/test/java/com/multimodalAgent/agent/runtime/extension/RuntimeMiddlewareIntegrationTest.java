@@ -15,6 +15,7 @@ import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
+import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
@@ -513,7 +514,15 @@ class RuntimeMiddlewareIntegrationTest {
                 new DefaultToolPolicyEngine(),
                 objectMapper
         );
-        return new AgentExecutionCoordinator(new AgentRunner(model, executor, publisher), chain);
+        return new AgentExecutionCoordinator(
+                new AgentRunner(
+                        model,
+                        executor,
+                        TestModelToolDefinitionProjector.INSTANCE,
+                        publisher
+                ),
+                chain
+        );
     }
 
     private AgentExecutionRequest request(

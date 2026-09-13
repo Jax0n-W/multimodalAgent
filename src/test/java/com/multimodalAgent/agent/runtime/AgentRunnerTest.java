@@ -7,6 +7,7 @@ import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
+import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
@@ -137,6 +138,33 @@ class AgentRunnerTest {
         assertEquals(1, result.iterations());
     }
 
+    @Test
+    void shouldExposeOnlyRegisteredToolsAllowedForCurrentRun() {
+        ScriptedAgentModel model = new ScriptedAgentModel(ModelTurn.finalAnswer("done"));
+        AgentRunner runner = runner(model, List.of(
+                new NamedTool("tool_a"),
+                new NamedTool("tool_b"),
+                new NamedTool("tool_c")
+        ));
+
+        AgentRunResult result = runner.run(new AgentRunSpec(
+                "run-visible-tools",
+                "session-visible-tools",
+                List.of(AgentMessage.user("answer")),
+                1,
+                Set.of("tool_a", "tool_c", "not_registered"),
+                Set.of()
+        ));
+
+        assertEquals(AgentStopReason.COMPLETED, result.stopReason());
+        assertEquals(
+                List.of("tool_a", "tool_c"),
+                model.modelRequests().get(0).tools().stream()
+                        .map(definition -> definition.name())
+                        .toList()
+        );
+    }
+
     private AgentRunSpec spec(int maxIterations) {
         return new AgentRunSpec(
                 "run-001",
@@ -164,7 +192,7 @@ class AgentRunnerTest {
                 new DefaultToolPolicyEngine(),
                 objectMapper
         );
-        return new AgentRunner(model, toolExecutor);
+        return new AgentRunner(model, toolExecutor, TestModelToolDefinitionProjector.INSTANCE);
     }
 
     private static final class FakeKnowledgeSearchTool
@@ -204,4 +232,32 @@ class AgentRunnerTest {
             throw new IllegalStateException("tool unavailable");
         }
     }
+
+    private static final class NamedTool implements AgentTool<KnowledgeSearchInput, String> {
+
+        private final ToolDescriptor<KnowledgeSearchInput> descriptor;
+
+        private NamedTool(String name) {
+            this.descriptor = new ToolDescriptor<>(
+                    name,
+                    "Test visible tool " + name,
+                    KnowledgeSearchInput.class,
+                    ToolRisk.LOW,
+                    true,
+                    true,
+                    false
+            );
+        }
+
+        @Override
+        public ToolDescriptor<KnowledgeSearchInput> descriptor() {
+            return descriptor;
+        }
+
+        @Override
+        public String execute(KnowledgeSearchInput input) {
+            return input.query();
+        }
+    }
+
 }

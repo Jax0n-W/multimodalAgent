@@ -9,6 +9,40 @@ multimodalAgent 是一个校园心理健康智能体
 - Spring AI 模型接入：默认通过 `ollama` 调用项目模型，也可切到 `openai`；`mock` 只作为无模型离线演示。
 - 可替换知识库：默认本地轻量检索，可打开 Chroma 镜像和查询。
 
+## Real Model 与 Agent Runtime 边界
+
+P5V 增加了一条使用本地微调模型的非流式纵向链路：
+
+```text
+AgentExecutionCoordinator
+    ↓
+AgentRunner
+    ↓
+Spring AI Provider Adapter
+    ↓
+Ollama OpenAI-compatible API（127.0.0.1:11434）
+    ↓
+mindbridge-qwen2.5-7b-ft
+    ↓
+ToolCall → ToolExecutor → ToolResult → Model → Final Answer
+```
+
+Spring AI 只负责和 Ollama 通信及转换 Tool Calling 协议，不拥有 Agent Loop，也不执行 Tool。
+模型只能看到当前 Run 的 `allowedTools`；模型返回的 ToolCall 仍必须经过强类型转换、
+Jakarta Validation、Policy 和 Runtime Middleware，最终只能由 `ToolExecutor` 执行。
+
+真实模型测试默认关闭且不会影响 CI。先确保本机 Ollama 已经运行且已注册
+`mindbridge-qwen2.5-7b-ft:latest`，再显式运行：
+
+```powershell
+mvn test -Preal-model
+```
+
+可通过 `OLLAMA_BASE_URL` 和 `OLLAMA_MODEL` 覆盖默认地址与模型。测试不会启动或停止
+Ollama，也不需要 OpenAI API Key。由于 Spring AI 1.0.0 原生 Ollama 映射会丢失
+ToolCall ID，P5V 的 Ollama adapter 使用 Spring AI OpenAI 协议客户端连接 Ollama 本地
+兼容端点，以保留审批、事件关联及 ToolResult 回灌所需的 provider ID。
+
 大模型 LoRA 微调、合并、GGUF 转换和 Ollama 接入流程见：[docs/qwen25-7b-lora-finetune-guide.md](docs/qwen25-7b-lora-finetune-guide.md)。
 
 ## 目录
