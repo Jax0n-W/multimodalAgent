@@ -10,6 +10,10 @@ import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolSucceededEvent;
 import com.multimodalAgent.agent.runtime.event.ToolValidatedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolValidationFailedEvent;
+import com.multimodalAgent.agent.runtime.extension.AgentRuntimeContext;
+import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
+import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareException;
+import com.multimodalAgent.agent.runtime.extension.ToolExecutionMetadata;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyContext;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyDecision;
@@ -44,7 +48,9 @@ public final class ToolExecutor {
                 toolCall,
                 policyContext,
                 new AgentEventEmitter(policyContext.runId(), NoopAgentEventPublisher.INSTANCE),
-                1
+                1,
+                AgentRuntimeContext.minimal(policyContext.runId(), policyContext.sessionId()),
+                RuntimeMiddlewareChain.empty()
         );
     }
 
@@ -54,11 +60,35 @@ public final class ToolExecutor {
             AgentEventEmitter eventEmitter,
             int iteration
     ) {
+        return execute(
+                toolCall,
+                policyContext,
+                eventEmitter,
+                iteration,
+                AgentRuntimeContext.minimal(policyContext.runId(), policyContext.sessionId()),
+                RuntimeMiddlewareChain.empty()
+        );
+    }
+
+    public ToolResult execute(
+            ToolCall toolCall,
+            ToolPolicyContext policyContext,
+            AgentEventEmitter eventEmitter,
+            int iteration,
+            AgentRuntimeContext runtimeContext,
+            RuntimeMiddlewareChain middlewareChain
+    ) {
         Objects.requireNonNull(toolCall, "toolCall must not be null");
         Objects.requireNonNull(policyContext, "policyContext must not be null");
         Objects.requireNonNull(eventEmitter, "eventEmitter must not be null");
+        Objects.requireNonNull(runtimeContext, "runtimeContext must not be null");
+        Objects.requireNonNull(middlewareChain, "middlewareChain must not be null");
         if (iteration < 1) {
             throw new IllegalArgumentException("iteration must be at least 1");
+        }
+        if (!policyContext.runId().equals(runtimeContext.runId())
+                || !policyContext.sessionId().equals(runtimeContext.sessionId())) {
+            throw new IllegalArgumentException("Runtime context identity must match policy context");
         }
         AgentTool<?, ?> tool = toolRegistry.find(toolCall.name()).orElse(null);
         if (tool == null) {
@@ -70,7 +100,15 @@ public final class ToolExecutor {
         }
 
         try {
-            return executeTyped(tool, toolCall, policyContext, eventEmitter, iteration);
+            return executeTyped(
+                    tool,
+                    toolCall,
+                    policyContext,
+                    eventEmitter,
+                    iteration,
+                    runtimeContext,
+                    middlewareChain
+            );
         } catch (ToolValidationException exception) {
             eventEmitter.emit(
                     iteration,
@@ -82,6 +120,8 @@ public final class ToolExecutor {
                     )
             );
             return ToolResult.failure(ToolErrorCode.INVALID_ARGUMENTS, exception.getMessage());
+        } catch (RuntimeMiddlewareException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
             emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.EXECUTION_FAILED);
             return ToolResult.failure(
@@ -96,7 +136,9 @@ public final class ToolExecutor {
             ToolCall toolCall,
             ToolPolicyContext policyContext,
             AgentEventEmitter eventEmitter,
-            int iteration
+            int iteration,
+            AgentRuntimeContext runtimeContext,
+            RuntimeMiddlewareChain middlewareChain
     ) {
         I input = argumentResolver.resolve(toolCall.arguments(), tool.descriptor().inputType());
         eventEmitter.emit(
@@ -139,6 +181,28 @@ public final class ToolExecutor {
             return ToolResult.approvalRequired(decision);
         }
 
+        return middlewareChain.aroundToolExecution(
+                runtimeContext,
+                new ToolExecutionMetadata(toolCall.id(), toolCall.name(), iteration),
+                () -> executeAllowedTool(
+                        tool,
+                        input,
+                        toolCall,
+                        evaluatedDecision,
+                        eventEmitter,
+                        iteration
+                )
+        );
+    }
+
+    private <I, O> ToolResult executeAllowedTool(
+            AgentTool<I, O> tool,
+            I input,
+            ToolCall toolCall,
+            ToolPolicyDecision decision,
+            AgentEventEmitter eventEmitter,
+            int iteration
+    ) {
         eventEmitter.emit(
                 iteration,
                 metadata -> new ToolStartedEvent(

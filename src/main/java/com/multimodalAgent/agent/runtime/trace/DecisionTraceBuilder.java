@@ -208,7 +208,8 @@ public final class DecisionTraceBuilder {
             throw new IllegalArgumentException("The terminal run event must be last");
         }
         boolean runCompleted = lastEvent.type() == AgentEventType.RUN_COMPLETED;
-        tools.values().forEach(tool -> tool.requireTerminallyConsistent(runCompleted));
+        AgentStopReason terminalReason = stopReason;
+        tools.values().forEach(tool -> tool.requireTerminallyConsistent(runCompleted, terminalReason));
 
         List<ToolDecisionTrace> toolDecisions = tools.values().stream()
                 .map(MutableToolDecision::toTrace)
@@ -272,10 +273,18 @@ public final class DecisionTraceBuilder {
             state = nextState;
         }
 
-        private void requireTerminallyConsistent(boolean runCompleted) {
+        private void requireTerminallyConsistent(
+                boolean runCompleted,
+                AgentStopReason terminalReason
+        ) {
             if (state == ToolTraceState.VALIDATED
-                    || state == ToolTraceState.POLICY_ALLOW
                     || state == ToolTraceState.STARTED) {
+                throw new IllegalArgumentException(
+                        "Tool lifecycle is incomplete for " + toolCallId + ": " + state
+                );
+            }
+            if (state == ToolTraceState.POLICY_ALLOW
+                    && terminalReason != AgentStopReason.INTERNAL_ERROR) {
                 throw new IllegalArgumentException(
                         "Tool lifecycle is incomplete for " + toolCallId + ": " + state
                 );
