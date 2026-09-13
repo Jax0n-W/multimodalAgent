@@ -26,3 +26,6 @@ application-local.yaml
 *.pid
 *.tmp
 *.swp
+
+# Local model weights
+models/**/*.gguf
