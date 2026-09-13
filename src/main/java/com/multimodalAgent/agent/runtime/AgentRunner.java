@@ -78,6 +78,7 @@ public final class AgentRunner {
         eventEmitter.emit(0, RunStartedEvent::new);
         List<AgentMessage> messages = new ArrayList<>(spec.messages());
         Set<String> toolsUsed = new LinkedHashSet<>();
+        Set<String> seenToolCallIds = new LinkedHashSet<>();
         TokenUsage totalUsage = TokenUsage.ZERO;
         ToolPolicyContext policyContext = new ToolPolicyContext(
                 spec.runId(),
@@ -94,7 +95,13 @@ public final class AgentRunner {
                 turn = middlewareChain.aroundModelCall(
                         runtimeContext,
                         new ModelCallMetadata(currentIteration, messages.size()),
-                        () -> invokeModel(messages, eventEmitter, currentIteration, invocationState)
+                        () -> invokeModel(
+                                messages,
+                                eventEmitter,
+                                currentIteration,
+                                invocationState,
+                                seenToolCallIds
+                        )
                 );
             } catch (RuntimeMiddlewareFailureException exception) {
                 TokenUsage usage = invocationState.completedTurn == null
@@ -276,7 +283,8 @@ public final class AgentRunner {
             List<AgentMessage> messages,
             AgentEventEmitter eventEmitter,
             int iteration,
-            ModelInvocationState invocationState
+            ModelInvocationState invocationState,
+            Set<String> seenToolCallIds
     ) {
         invocationState.started = true;
         eventEmitter.emit(iteration, ModelStartedEvent::new);
@@ -285,6 +293,7 @@ public final class AgentRunner {
                     model.generate(List.copyOf(messages)),
                     "model returned a null turn"
             );
+            validateUniqueToolCallIds(turn, seenToolCallIds);
             eventEmitter.emit(
                     iteration,
                     metadata -> new ModelCompletedEvent(
@@ -305,6 +314,18 @@ public final class AgentRunner {
             );
             throw exception;
         }
+    }
+
+    private void validateUniqueToolCallIds(ModelTurn turn, Set<String> seenToolCallIds) {
+        Set<String> currentIds = new LinkedHashSet<>();
+        for (ToolCall toolCall : turn.toolCalls()) {
+            if (!currentIds.add(toolCall.id()) || seenToolCallIds.contains(toolCall.id())) {
+                throw new IllegalArgumentException(
+                        "Tool call id must be unique within a run: " + toolCall.id()
+                );
+            }
+        }
+        seenToolCallIds.addAll(currentIds);
     }
 
     private AgentRunResult stopForMiddlewareFailure(

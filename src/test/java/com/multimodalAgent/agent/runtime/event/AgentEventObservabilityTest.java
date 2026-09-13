@@ -40,6 +40,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static com.multimodalAgent.agent.runtime.support.TraceAssertions.assertNoEvent;
+import static com.multimodalAgent.agent.runtime.support.TraceAssertions.assertNoEventsAfterRunTerminal;
+import static com.multimodalAgent.agent.runtime.support.TraceAssertions.assertSingleRunTerminal;
 
 class AgentEventObservabilityTest {
 
@@ -66,6 +69,10 @@ class AgentEventObservabilityTest {
         assertEquals(0, observation.events().get(0).iteration());
         assertEquals(1, observation.events().get(1).iteration());
         assertThrows(UnsupportedOperationException.class, observation.events()::clear);
+        assertNoEvent(observation.events(), AgentEventType.RUN_STOPPED,
+                AgentEventType.RUN_WAITING_APPROVAL, AgentEventType.TOOL_REQUESTED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
 
         DecisionTrace trace = trace(observation);
         assertEquals(1, trace.modelCallCount());
@@ -141,6 +148,11 @@ class AgentEventObservabilityTest {
         );
         assertEquals(0, tool.executionCount());
         assertEquals(AgentStopReason.TOOL_ERROR, observation.result().stopReason());
+        assertNoEvent(observation.events(), AgentEventType.TOOL_VALIDATED,
+                AgentEventType.TOOL_POLICY_EVALUATED, AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED, AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
 
         ToolDecisionTrace decision = trace(observation).orderedToolDecisions().get(0);
         assertNull(decision.policyDecision());
@@ -170,6 +182,11 @@ class AgentEventObservabilityTest {
         );
         ToolFailedEvent failed = (ToolFailedEvent) observation.events().get(4);
         assertEquals(ToolErrorCode.TOOL_NOT_FOUND, failed.errorCode());
+        assertNoEvent(observation.events(), AgentEventType.TOOL_VALIDATED,
+                AgentEventType.TOOL_POLICY_EVALUATED, AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED, AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
 
         ToolDecisionTrace decision = trace(observation).orderedToolDecisions().get(0);
         assertNull(decision.policyDecision());
@@ -201,6 +218,11 @@ class AgentEventObservabilityTest {
         );
         assertEquals(0, tool.executionCount());
         assertEquals(AgentStopReason.POLICY_BLOCKED, observation.result().stopReason());
+        assertNoEvent(observation.events(), AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED, AgentEventType.TOOL_FAILED,
+                AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
 
         ToolDecisionTrace decision = trace(observation).orderedToolDecisions().get(0);
         assertEquals(ToolPolicyDecisionType.DENY, decision.policyDecision());
@@ -232,6 +254,11 @@ class AgentEventObservabilityTest {
                 AgentEventType.RUN_WAITING_APPROVAL
         );
         assertEquals(0, tool.executionCount());
+        assertNoEvent(observation.events(), AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED, AgentEventType.TOOL_FAILED,
+                AgentEventType.RUN_COMPLETED, AgentEventType.RUN_STOPPED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
 
         DecisionTrace trace = trace(observation);
         ToolDecisionTrace decision = trace.orderedToolDecisions().get(0);
@@ -267,6 +294,10 @@ class AgentEventObservabilityTest {
         ToolFailedEvent failed = (ToolFailedEvent) observation.events().get(7);
         assertEquals(ToolErrorCode.EXECUTION_FAILED, failed.errorCode());
         assertEquals(AgentStopReason.TOOL_ERROR, observation.result().stopReason());
+        assertNoEvent(observation.events(), AgentEventType.TOOL_SUCCEEDED,
+                AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         assertEquals(ToolExecutionOutcome.FAILED,
                 trace(observation).orderedToolDecisions().get(0).executionOutcome());
     }
@@ -291,6 +322,10 @@ class AgentEventObservabilityTest {
                 AgentEventType.RUN_STOPPED
         );
         assertEquals(AgentStopReason.MODEL_ERROR, observation.result().stopReason());
+        assertNoEvent(observation.events(), AgentEventType.MODEL_COMPLETED,
+                AgentEventType.TOOL_STARTED, AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         DecisionTrace trace = trace(observation);
         assertEquals(1, trace.errors().size());
         assertEquals("MODEL_ERROR", trace.errors().get(0).errorCode());
@@ -315,7 +350,44 @@ class AgentEventObservabilityTest {
                 observation.events().get(observation.events().size() - 1).type());
         assertEquals(1, terminalEventCount(observation.events()));
         assertFalse(types(observation.events()).contains(AgentEventType.RUN_COMPLETED));
+        assertNoEvent(observation.events(), AgentEventType.MODEL_FAILED,
+                AgentEventType.TOOL_FAILED, AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         assertEquals(AgentStopReason.MAX_ITERATIONS, trace(observation).stopReason());
+    }
+
+    @Test
+    void shouldRejectToolCallIdReusedAcrossModelIterations() {
+        CountingKnowledgeSearchTool tool = new CountingKnowledgeSearchTool();
+        Observation observation = observe(
+                new ScriptedAgentModel(
+                        knowledgeCall("reused-call", Map.of("query", "one", "topK", 1)),
+                        knowledgeCall("reused-call", Map.of("query", "two", "topK", 1))
+                ),
+                List.of(tool),
+                Set.of("knowledge_search"),
+                Set.of(),
+                3
+        );
+
+        assertEquals(AgentStopReason.MODEL_ERROR, observation.result().stopReason());
+        assertEquals(2, observation.result().iterations());
+        assertEquals(1, tool.executionCount());
+        assertTypes(observation.events(),
+                AgentEventType.RUN_STARTED,
+                AgentEventType.MODEL_STARTED,
+                AgentEventType.MODEL_COMPLETED,
+                AgentEventType.TOOL_REQUESTED,
+                AgentEventType.TOOL_VALIDATED,
+                AgentEventType.TOOL_POLICY_EVALUATED,
+                AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED,
+                AgentEventType.MODEL_STARTED,
+                AgentEventType.MODEL_FAILED,
+                AgentEventType.RUN_STOPPED
+        );
+        assertEquals(AgentStopReason.MODEL_ERROR, trace(observation).stopReason());
     }
 
     @Test

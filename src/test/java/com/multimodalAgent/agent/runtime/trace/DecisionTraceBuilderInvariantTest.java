@@ -49,6 +49,14 @@ class DecisionTraceBuilderInvariantTest {
     }
 
     @Test
+    void shouldRejectRunStartedWithNonZeroIteration() {
+        assertRejected(List.of(
+                new RunStartedEvent(metadata(RUN_ID, 1, 1)),
+                runCompleted(RUN_ID, 2, 1)
+        ));
+    }
+
+    @Test
     void shouldRejectMixedRunIds() {
         assertRejected(List.of(
                 runStarted(RUN_ID, 1),
@@ -84,6 +92,16 @@ class DecisionTraceBuilderInvariantTest {
                 runStarted(RUN_ID, 1),
                 runCompleted(RUN_ID, 2, 0),
                 runStopped(RUN_ID, 3, 0, AgentStopReason.INTERNAL_ERROR, null)
+        ));
+    }
+
+    @Test
+    void shouldRejectRunTerminalIterationThatDoesNotMatchItsCause() {
+        assertRejected(List.of(
+                runStarted(RUN_ID, 1),
+                modelStarted(RUN_ID, 2, 1),
+                modelCompleted(RUN_ID, 3, 1, ModelFinishReason.STOP, 0),
+                runCompleted(RUN_ID, 4, 2)
         ));
     }
 
@@ -136,6 +154,99 @@ class DecisionTraceBuilderInvariantTest {
                 modelCompleted(RUN_ID, 3, 1, ModelFinishReason.STOP, 0),
                 modelFailed(RUN_ID, 4, 1),
                 runStopped(RUN_ID, 5, 1, AgentStopReason.MODEL_ERROR, null)
+        ));
+    }
+
+    @Test
+    void shouldRejectToolRequestAfterStopTurn() {
+        assertRejected(List.of(
+                runStarted(RUN_ID, 1),
+                modelStarted(RUN_ID, 2, 1),
+                modelCompleted(RUN_ID, 3, 1, ModelFinishReason.STOP, 0),
+                toolRequested(4, CALL_ID, TOOL_NAME, 1),
+                toolFailed(5, CALL_ID, TOOL_NAME, 1, ToolErrorCode.TOOL_NOT_FOUND),
+                runStopped(RUN_ID, 6, 1, AgentStopReason.TOOL_ERROR,
+                        ToolErrorCode.TOOL_NOT_FOUND)
+        ));
+    }
+
+    @Test
+    void shouldRejectDeclaredToolCallCountMismatch() {
+        List<AgentEvent> events = new ArrayList<>();
+        events.add(runStarted(RUN_ID, 1));
+        events.add(modelStarted(RUN_ID, 2, 1));
+        events.add(modelCompleted(RUN_ID, 3, 1, ModelFinishReason.TOOL_CALLS, 2));
+        events.add(toolRequested(4, CALL_ID, TOOL_NAME, 1));
+        events.add(toolValidated(5, CALL_ID, TOOL_NAME, 1));
+        events.add(toolPolicy(6, CALL_ID, TOOL_NAME, 1, ToolPolicyDecisionType.ALLOW));
+        events.add(toolStarted(7, CALL_ID, TOOL_NAME, 1));
+        events.add(toolSucceeded(8, CALL_ID, TOOL_NAME, 1));
+        events.add(modelStarted(RUN_ID, 9, 2));
+        events.add(modelCompleted(RUN_ID, 10, 2, ModelFinishReason.STOP, 0));
+        events.add(runCompleted(RUN_ID, 11, 2));
+
+        assertRejected(events);
+    }
+
+    @Test
+    void shouldRejectToolRequestAfterExecutionLifecycleBegins() {
+        List<AgentEvent> events = twoToolRequestPrefix(false);
+        events.add(toolRequested(9, "call-2", "second_tool", 1));
+        events.add(toolValidated(10, "call-2", "second_tool", 1));
+        events.add(toolPolicy(11, "call-2", "second_tool", 1,
+                ToolPolicyDecisionType.ALLOW));
+        events.add(toolStarted(12, "call-2", "second_tool", 1));
+        events.add(toolSucceeded(13, "call-2", "second_tool", 1));
+        events.add(modelStarted(RUN_ID, 14, 2));
+        events.add(modelCompleted(RUN_ID, 15, 2, ModelFinishReason.STOP, 0));
+        events.add(runCompleted(RUN_ID, 16, 2));
+
+        assertRejected(events);
+    }
+
+    @Test
+    void shouldRejectInterleavedToolExecutionLifecycles() {
+        List<AgentEvent> events = new ArrayList<>();
+        events.add(runStarted(RUN_ID, 1));
+        events.add(modelStarted(RUN_ID, 2, 1));
+        events.add(modelCompleted(RUN_ID, 3, 1, ModelFinishReason.TOOL_CALLS, 2));
+        events.add(toolRequested(4, CALL_ID, TOOL_NAME, 1));
+        events.add(toolRequested(5, "call-2", "second_tool", 1));
+        events.add(toolValidated(6, CALL_ID, TOOL_NAME, 1));
+        events.add(toolPolicy(7, CALL_ID, TOOL_NAME, 1, ToolPolicyDecisionType.ALLOW));
+        events.add(toolStarted(8, CALL_ID, TOOL_NAME, 1));
+        events.add(toolValidated(9, "call-2", "second_tool", 1));
+        events.add(toolPolicy(10, "call-2", "second_tool", 1,
+                ToolPolicyDecisionType.ALLOW));
+        events.add(toolStarted(11, "call-2", "second_tool", 1));
+        events.add(toolSucceeded(12, CALL_ID, TOOL_NAME, 1));
+        events.add(toolSucceeded(13, "call-2", "second_tool", 1));
+        events.add(modelStarted(RUN_ID, 14, 2));
+        events.add(modelCompleted(RUN_ID, 15, 2, ModelFinishReason.STOP, 0));
+        events.add(runCompleted(RUN_ID, 16, 2));
+
+        assertRejected(events);
+    }
+
+    @Test
+    void shouldRejectModelInvocationAfterModelFailure() {
+        assertRejected(List.of(
+                runStarted(RUN_ID, 1),
+                modelStarted(RUN_ID, 2, 1),
+                modelFailed(RUN_ID, 3, 1),
+                modelStarted(RUN_ID, 4, 2),
+                modelFailed(RUN_ID, 5, 2),
+                runStopped(RUN_ID, 6, 2, AgentStopReason.MODEL_ERROR, null)
+        ));
+    }
+
+    @Test
+    void shouldRejectWrongTerminalAfterModelFailure() {
+        assertRejected(List.of(
+                runStarted(RUN_ID, 1),
+                modelStarted(RUN_ID, 2, 1),
+                modelFailed(RUN_ID, 3, 1),
+                runStopped(RUN_ID, 4, 1, AgentStopReason.INTERNAL_ERROR, null)
         ));
     }
 
@@ -259,6 +370,16 @@ class DecisionTraceBuilderInvariantTest {
     }
 
     @Test
+    void shouldRejectWrongTerminalAfterPolicyDeny() {
+        List<AgentEvent> events = toolRequestPrefix();
+        events.add(toolValidated(5, CALL_ID, TOOL_NAME, 1));
+        events.add(toolPolicy(6, CALL_ID, TOOL_NAME, 1, ToolPolicyDecisionType.DENY));
+        events.add(runStopped(RUN_ID, 7, 1, AgentStopReason.INTERNAL_ERROR, null));
+
+        assertRejected(events);
+    }
+
+    @Test
     void shouldAcceptApprovalPath() {
         List<AgentEvent> events = toolRequestPrefix();
         events.add(toolValidated(5, CALL_ID, TOOL_NAME, 1));
@@ -272,6 +393,17 @@ class DecisionTraceBuilderInvariantTest {
         assertEquals(ToolPolicyDecisionType.REQUIRE_APPROVAL, decision.policyDecision());
         assertEquals(ToolExecutionOutcome.NOT_STARTED, decision.executionOutcome());
         assertTrue(trace.waitingApproval());
+    }
+
+    @Test
+    void shouldRejectWrongTerminalAfterApprovalRequirement() {
+        List<AgentEvent> events = toolRequestPrefix();
+        events.add(toolValidated(5, CALL_ID, TOOL_NAME, 1));
+        events.add(toolPolicy(6, CALL_ID, TOOL_NAME, 1,
+                ToolPolicyDecisionType.REQUIRE_APPROVAL));
+        events.add(runStopped(RUN_ID, 7, 1, AgentStopReason.INTERNAL_ERROR, null));
+
+        assertRejected(events);
     }
 
     @Test
@@ -303,6 +435,23 @@ class DecisionTraceBuilderInvariantTest {
         assertEquals(ToolErrorCode.EXECUTION_FAILED, decision.errorCode());
     }
 
+    @Test
+    void shouldRejectWrongTerminalAfterToolFailure() {
+        List<AgentEvent> events = allowedStartedToolPrefix();
+        events.add(toolFailed(8, CALL_ID, TOOL_NAME, 1, ToolErrorCode.EXECUTION_FAILED));
+        events.add(runStopped(RUN_ID, 9, 1, AgentStopReason.INTERNAL_ERROR, null));
+
+        assertRejected(events);
+    }
+
+    @Test
+    void shouldRejectRunCompletionWithoutStopTurn() {
+        List<AgentEvent> events = successfulToolPrefix();
+        events.add(runCompleted(RUN_ID, 9, 1));
+
+        assertRejected(events);
+    }
+
     private void assertRejected(List<AgentEvent> events) {
         assertThrows(IllegalArgumentException.class, () -> builder.build(events));
     }
@@ -327,6 +476,23 @@ class DecisionTraceBuilderInvariantTest {
     private List<AgentEvent> successfulToolPrefix() {
         List<AgentEvent> events = allowedStartedToolPrefix();
         events.add(toolSucceeded(8, CALL_ID, TOOL_NAME, 1));
+        return events;
+    }
+
+    private List<AgentEvent> twoToolRequestPrefix(boolean includeSecondRequestUpFront) {
+        List<AgentEvent> events = new ArrayList<>();
+        events.add(runStarted(RUN_ID, 1));
+        events.add(modelStarted(RUN_ID, 2, 1));
+        events.add(modelCompleted(RUN_ID, 3, 1, ModelFinishReason.TOOL_CALLS, 2));
+        events.add(toolRequested(4, CALL_ID, TOOL_NAME, 1));
+        int sequence = 5;
+        if (includeSecondRequestUpFront) {
+            events.add(toolRequested(sequence++, "call-2", "second_tool", 1));
+        }
+        events.add(toolValidated(sequence++, CALL_ID, TOOL_NAME, 1));
+        events.add(toolPolicy(sequence++, CALL_ID, TOOL_NAME, 1, ToolPolicyDecisionType.ALLOW));
+        events.add(toolStarted(sequence++, CALL_ID, TOOL_NAME, 1));
+        events.add(toolSucceeded(sequence, CALL_ID, TOOL_NAME, 1));
         return events;
     }
 

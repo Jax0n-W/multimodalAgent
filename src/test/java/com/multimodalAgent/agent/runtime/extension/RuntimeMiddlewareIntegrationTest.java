@@ -40,6 +40,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static com.multimodalAgent.agent.runtime.support.TraceAssertions.assertNoEvent;
+import static com.multimodalAgent.agent.runtime.support.TraceAssertions.assertNoEventsAfterRunTerminal;
+import static com.multimodalAgent.agent.runtime.support.TraceAssertions.assertSingleRunTerminal;
 
 class RuntimeMiddlewareIntegrationTest {
 
@@ -203,6 +206,10 @@ class RuntimeMiddlewareIntegrationTest {
                 AgentEventType.RUN_COMPLETED
         ), types(publisher.events()));
         assertEquals(1, terminalCount(publisher.events()));
+        assertNoEvent(publisher.events(), AgentEventType.RUN_STOPPED,
+                AgentEventType.RUN_WAITING_APPROVAL);
+        assertSingleRunTerminal(publisher.events());
+        assertNoEventsAfterRunTerminal(publisher.events());
     }
 
     @Test
@@ -236,6 +243,11 @@ class RuntimeMiddlewareIntegrationTest {
         assertEquals(0, modelCalls.get());
         assertEquals(List.of(AgentEventType.RUN_STARTED, AgentEventType.RUN_STOPPED),
                 types(observation.events()));
+        assertNoEvent(observation.events(), AgentEventType.MODEL_STARTED,
+                AgentEventType.MODEL_COMPLETED, AgentEventType.MODEL_FAILED,
+                AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         assertEquals(AgentStopReason.INTERNAL_ERROR,
                 TRACE_BUILDER.build(observation.events()).stopReason());
     }
@@ -270,6 +282,10 @@ class RuntimeMiddlewareIntegrationTest {
                 AgentEventType.MODEL_COMPLETED,
                 AgentEventType.RUN_STOPPED
         ), types(observation.events()));
+        assertNoEvent(observation.events(), AgentEventType.MODEL_FAILED,
+                AgentEventType.RUN_COMPLETED, AgentEventType.TOOL_STARTED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         assertEquals(AgentStopReason.INTERNAL_ERROR,
                 TRACE_BUILDER.build(observation.events()).stopReason());
     }
@@ -296,6 +312,10 @@ class RuntimeMiddlewareIntegrationTest {
                 AgentEventType.MODEL_FAILED,
                 AgentEventType.RUN_STOPPED
         ), types(observation.events()));
+        assertNoEvent(observation.events(), AgentEventType.MODEL_COMPLETED,
+                AgentEventType.TOOL_STARTED, AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         assertEquals(AgentStopReason.MODEL_ERROR,
                 TRACE_BUILDER.build(observation.events()).stopReason());
     }
@@ -322,6 +342,11 @@ class RuntimeMiddlewareIntegrationTest {
                 AgentEventType.MODEL_FAILED,
                 AgentEventType.RUN_STOPPED
         ), types(observation.events()));
+        assertNoEvent(observation.events(), AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED, AgentEventType.TOOL_FAILED,
+                AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         assertEquals(AgentStopReason.MODEL_ERROR,
                 TRACE_BUILDER.build(observation.events()).stopReason());
     }
@@ -359,6 +384,11 @@ class RuntimeMiddlewareIntegrationTest {
                 AgentEventType.TOOL_POLICY_EVALUATED,
                 AgentEventType.RUN_STOPPED
         ), types(observation.events()));
+        assertNoEvent(observation.events(), AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED, AgentEventType.TOOL_FAILED,
+                AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         DecisionTrace trace = TRACE_BUILDER.build(observation.events());
         assertEquals(AgentStopReason.INTERNAL_ERROR, trace.stopReason());
         assertEquals(ToolExecutionOutcome.NOT_STARTED,
@@ -381,6 +411,10 @@ class RuntimeMiddlewareIntegrationTest {
         assertEquals(AgentStopReason.TOOL_ERROR, observation.result().stopReason());
         assertEquals(1, tool.executions());
         assertEquals(ToolErrorCode.EXECUTION_FAILED, observation.result().toolErrorCode());
+        assertNoEvent(observation.events(), AgentEventType.TOOL_SUCCEEDED,
+                AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         assertEquals(AgentEventType.TOOL_FAILED,
                 observation.events().get(observation.events().size() - 2).type());
         assertEquals(AgentStopReason.TOOL_ERROR,
@@ -442,6 +476,10 @@ class RuntimeMiddlewareIntegrationTest {
                 .filter(type -> type == AgentEventType.TOOL_SUCCEEDED)
                 .count());
         assertFalse(types(observation.events()).contains(AgentEventType.TOOL_FAILED));
+        assertNoEvent(observation.events(), AgentEventType.TOOL_FAILED,
+                AgentEventType.RUN_COMPLETED);
+        assertSingleRunTerminal(observation.events());
+        assertNoEventsAfterRunTerminal(observation.events());
         DecisionTrace trace = TRACE_BUILDER.build(observation.events());
         assertEquals(ToolExecutionOutcome.SUCCEEDED,
                 trace.orderedToolDecisions().get(0).executionOutcome());

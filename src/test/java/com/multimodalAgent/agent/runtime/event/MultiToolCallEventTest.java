@@ -32,6 +32,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MultiToolCallEventTest {
 
@@ -42,16 +43,19 @@ class MultiToolCallEventTest {
     void shouldPublishAllRequestsBeforeExecutingMultipleTools() {
         CountingTool toolA = new CountingTool("tool_a", false, false);
         CountingTool toolB = new CountingTool("tool_b", false, false);
-        Observation observation = observe(
-                new ScriptedAgentModel(
-                        ModelTurn.toolCall(
-                                call("call-a", "tool_a"),
-                                call("call-b", "tool_b")
-                        ),
-                        ModelTurn.finalAnswer("done")
+        CountingTool toolC = new CountingTool("tool_c", false, false);
+        ScriptedAgentModel model = new ScriptedAgentModel(
+                ModelTurn.toolCall(
+                        call("call-a", "tool_a"),
+                        call("call-b", "tool_b"),
+                        call("call-c", "tool_c")
                 ),
-                List.of(toolA, toolB),
-                Set.of("tool_a", "tool_b"),
+                ModelTurn.finalAnswer("done")
+        );
+        Observation observation = observe(
+                model,
+                List.of(toolA, toolB, toolC),
+                Set.of("tool_a", "tool_b", "tool_c"),
                 Set.of()
         );
 
@@ -61,6 +65,11 @@ class MultiToolCallEventTest {
                 AgentEventType.MODEL_COMPLETED,
                 AgentEventType.TOOL_REQUESTED,
                 AgentEventType.TOOL_REQUESTED,
+                AgentEventType.TOOL_REQUESTED,
+                AgentEventType.TOOL_VALIDATED,
+                AgentEventType.TOOL_POLICY_EVALUATED,
+                AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED,
                 AgentEventType.TOOL_VALIDATED,
                 AgentEventType.TOOL_POLICY_EVALUATED,
                 AgentEventType.TOOL_STARTED,
@@ -73,35 +82,56 @@ class MultiToolCallEventTest {
                 AgentEventType.MODEL_COMPLETED,
                 AgentEventType.RUN_COMPLETED
         ), types(observation.events()));
-        assertToolCorrelation(observation.events().subList(3, 5), List.of("call-a", "call-b"), 1);
-        assertToolCorrelation(observation.events().subList(5, 9), List.of("call-a"), 1);
-        assertToolCorrelation(observation.events().subList(9, 13), List.of("call-b"), 1);
+        assertToolCorrelation(observation.events().subList(3, 6),
+                List.of("call-a", "call-b", "call-c"), 1);
+        assertToolCorrelation(observation.events().subList(6, 10), List.of("call-a"), 1);
+        assertToolCorrelation(observation.events().subList(10, 14), List.of("call-b"), 1);
+        assertToolCorrelation(observation.events().subList(14, 18), List.of("call-c"), 1);
         assertEquals(1, toolA.executionCount());
         assertEquals(1, toolB.executionCount());
+        assertEquals(1, toolC.executionCount());
+        assertTrue(indexOf(observation.events(), AgentEventType.TOOL_REQUESTED, "call-c")
+                < indexOf(observation.events(), AgentEventType.TOOL_VALIDATED, "call-a"));
+        assertTrue(indexOf(observation.events(), AgentEventType.TOOL_SUCCEEDED, "call-a")
+                < indexOf(observation.events(), AgentEventType.TOOL_STARTED, "call-b"));
+        assertTrue(indexOf(observation.events(), AgentEventType.TOOL_SUCCEEDED, "call-b")
+                < indexOf(observation.events(), AgentEventType.TOOL_STARTED, "call-c"));
+
+        List<AgentMessage> secondModelRequest = model.requests().get(1);
+        assertEquals(List.of("tool_a", "tool_b", "tool_c"), secondModelRequest.stream()
+                .filter(message -> message.role() == com.multimodalAgent.agent.runtime.model.AgentMessageRole.TOOL)
+                .map(AgentMessage::toolName)
+                .toList());
 
         DecisionTrace trace = TRACE_BUILDER.build(observation.events());
-        assertEquals(2, trace.toolCallCount());
+        assertEquals(3, trace.toolCallCount());
         assertEquals(2, trace.iterations());
-        assertEquals(List.of("call-a", "call-b"), trace.orderedToolDecisions().stream()
+        assertEquals(List.of("call-a", "call-b", "call-c"), trace.orderedToolDecisions().stream()
                 .map(ToolDecisionTrace::toolCallId)
                 .toList());
-        assertEquals(List.of(ToolExecutionOutcome.SUCCEEDED, ToolExecutionOutcome.SUCCEEDED),
+        assertEquals(List.of(
+                        ToolExecutionOutcome.SUCCEEDED,
+                        ToolExecutionOutcome.SUCCEEDED,
+                        ToolExecutionOutcome.SUCCEEDED
+                ),
                 trace.orderedToolDecisions().stream()
                         .map(ToolDecisionTrace::executionOutcome)
                         .toList());
     }
 
     @Test
-    void shouldLeaveLaterRequestedToolNotStartedWhenFirstToolFails() {
-        CountingTool toolA = new CountingTool("tool_a", false, true);
-        CountingTool toolB = new CountingTool("tool_b", false, false);
+    void shouldPreservePartialTruthAndLeaveLaterToolNotStartedAfterFailure() {
+        CountingTool toolA = new CountingTool("tool_a", false, false);
+        CountingTool toolB = new CountingTool("tool_b", false, true);
+        CountingTool toolC = new CountingTool("tool_c", false, false);
         Observation observation = observe(
                 new ScriptedAgentModel(ModelTurn.toolCall(
                         call("call-a", "tool_a"),
-                        call("call-b", "tool_b")
+                        call("call-b", "tool_b"),
+                        call("call-c", "tool_c")
                 )),
-                List.of(toolA, toolB),
-                Set.of("tool_a", "tool_b"),
+                List.of(toolA, toolB, toolC),
+                Set.of("tool_a", "tool_b", "tool_c"),
                 Set.of()
         );
 
@@ -111,6 +141,11 @@ class MultiToolCallEventTest {
                 AgentEventType.MODEL_COMPLETED,
                 AgentEventType.TOOL_REQUESTED,
                 AgentEventType.TOOL_REQUESTED,
+                AgentEventType.TOOL_REQUESTED,
+                AgentEventType.TOOL_VALIDATED,
+                AgentEventType.TOOL_POLICY_EVALUATED,
+                AgentEventType.TOOL_STARTED,
+                AgentEventType.TOOL_SUCCEEDED,
                 AgentEventType.TOOL_VALIDATED,
                 AgentEventType.TOOL_POLICY_EVALUATED,
                 AgentEventType.TOOL_STARTED,
@@ -119,16 +154,21 @@ class MultiToolCallEventTest {
         ), types(observation.events()));
         assertEquals(AgentStopReason.TOOL_ERROR, observation.result().stopReason());
         assertEquals(1, toolA.executionCount());
-        assertEquals(0, toolB.executionCount());
-        assertFalse(observation.events().subList(5, observation.events().size()).stream()
-                .anyMatch(event -> "call-b".equals(toolCallId(event))));
+        assertEquals(1, toolB.executionCount());
+        assertEquals(0, toolC.executionCount());
+        assertFalse(types(observation.events()).contains(AgentEventType.MODEL_FAILED));
+        assertFalse(types(observation.events()).contains(AgentEventType.RUN_COMPLETED));
+        assertFalse(observation.events().subList(6, observation.events().size()).stream()
+                .anyMatch(event -> "call-c".equals(toolCallId(event))));
 
         DecisionTrace trace = TRACE_BUILDER.build(observation.events());
-        assertEquals(2, trace.toolCallCount());
-        assertEquals(ToolExecutionOutcome.FAILED,
+        assertEquals(3, trace.toolCallCount());
+        assertEquals(ToolExecutionOutcome.SUCCEEDED,
                 trace.orderedToolDecisions().get(0).executionOutcome());
-        assertEquals(ToolExecutionOutcome.NOT_STARTED,
+        assertEquals(ToolExecutionOutcome.FAILED,
                 trace.orderedToolDecisions().get(1).executionOutcome());
+        assertEquals(ToolExecutionOutcome.NOT_STARTED,
+                trace.orderedToolDecisions().get(2).executionOutcome());
     }
 
     @Test
@@ -225,6 +265,20 @@ class MultiToolCallEventTest {
             return toolEvent.toolCallId();
         }
         return null;
+    }
+
+    private static int indexOf(
+            List<AgentEvent> events,
+            AgentEventType type,
+            String callId
+    ) {
+        for (int index = 0; index < events.size(); index++) {
+            AgentEvent event = events.get(index);
+            if (event.type() == type && callId.equals(toolCallId(event))) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private record Observation(AgentRunResult result, List<AgentEvent> events) {

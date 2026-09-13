@@ -1,8 +1,10 @@
 package com.multimodalAgent.agent.runtime.model;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 public record ModelTurn(
         ModelFinishReason finishReason,
@@ -22,6 +24,12 @@ public record ModelTurn(
         }
         if (finishReason == ModelFinishReason.TOOL_CALLS && toolCalls.isEmpty()) {
             throw new IllegalArgumentException("A tool-call model turn must contain at least one call");
+        }
+        Set<String> toolCallIds = new HashSet<>();
+        for (ToolCall toolCall : toolCalls) {
+            if (!toolCallIds.add(toolCall.id())) {
+                throw new IllegalArgumentException("Duplicate tool call id: " + toolCall.id());
+            }
         }
     }
 

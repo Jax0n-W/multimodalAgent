@@ -17,6 +17,7 @@ import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolSucceededEvent;
 import com.multimodalAgent.agent.runtime.event.ToolValidatedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolValidationFailedEvent;
+import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
 import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyDecisionType;
 
@@ -48,6 +49,9 @@ public final class DecisionTraceBuilder {
         AgentStopReason stopReason = null;
         boolean waitingApproval = false;
         ModelLifecycle modelLifecycle = new ModelLifecycle();
+        Map<Integer, ModelCompletion> modelCompletions = new LinkedHashMap<>();
+        Map<Integer, Integer> requestedToolCounts = new LinkedHashMap<>();
+        boolean childRequiresRunTerminal = false;
 
         for (int index = 0; index < snapshot.size(); index++) {
             AgentEvent event = Objects.requireNonNull(snapshot.get(index), "event must not be null");
@@ -58,17 +62,37 @@ public final class DecisionTraceBuilder {
             if (event.sequence() != expectedSequence) {
                 throw new IllegalArgumentException("Event sequence must be contiguous and start at 1");
             }
+            if (childRequiresRunTerminal) {
+                if (!(event instanceof RunStoppedEvent)
+                        && !(event instanceof RunWaitingApprovalEvent)) {
+                    throw new IllegalArgumentException(
+                            "No core work may follow a terminal child outcome"
+                    );
+                }
+                childRequiresRunTerminal = false;
+            }
 
             if (event instanceof RunStartedEvent) {
                 if (index != 0) {
                     throw new IllegalArgumentException("RUN_STARTED may only appear once as the first event");
                 }
+                if (event.iteration() != 0) {
+                    throw new IllegalArgumentException("RUN_STARTED iteration must be 0");
+                }
             } else if (event instanceof ModelStartedEvent) {
                 modelLifecycle.start(event.iteration());
                 modelCallCount++;
                 iterations = Math.max(iterations, event.iteration());
-            } else if (event instanceof ModelCompletedEvent) {
+            } else if (event instanceof ModelCompletedEvent completed) {
                 modelLifecycle.complete(event.iteration());
+                if (completed.finishReason() == ModelFinishReason.STOP
+                        && completed.toolCallCount() != 0) {
+                    throw new IllegalArgumentException("A STOP model completion cannot declare tool calls");
+                }
+                modelCompletions.put(
+                        event.iteration(),
+                        new ModelCompletion(completed, index)
+                );
             } else if (event instanceof ModelFailedEvent failed) {
                 modelLifecycle.fail(event.iteration());
                 errors.add(new DecisionTraceError(
@@ -79,7 +103,22 @@ public final class DecisionTraceBuilder {
                         null,
                         failed.stopReason().name()
                 ));
+                childRequiresRunTerminal = true;
             } else if (event instanceof ToolRequestedEvent requested) {
+                ModelCompletion completion = modelCompletions.get(requested.iteration());
+                if (completion == null
+                        || completion.event().finishReason()
+                        != ModelFinishReason.TOOL_CALLS) {
+                    throw new IllegalArgumentException(
+                            "TOOL_REQUESTED requires a TOOL_CALLS model completion in the same iteration"
+                    );
+                }
+                int requestCount = requestedToolCounts.merge(requested.iteration(), 1, Integer::sum);
+                if (requestCount > completion.event().toolCallCount()) {
+                    throw new IllegalArgumentException(
+                            "TOOL_REQUESTED count exceeds the model-declared toolCallCount"
+                    );
+                }
                 MutableToolDecision previous = tools.putIfAbsent(
                         requested.toolCallId(),
                         new MutableToolDecision(
@@ -121,6 +160,7 @@ public final class DecisionTraceBuilder {
                         failed.toolName(),
                         failed.errorCode().name()
                 ));
+                childRequiresRunTerminal = true;
             } else if (event instanceof ToolPolicyEvaluatedEvent evaluated) {
                 MutableToolDecision tool = requireTool(
                         tools,
@@ -137,8 +177,10 @@ public final class DecisionTraceBuilder {
                 tool.policyDecision = evaluated.decision();
                 if (evaluated.decision() == ToolPolicyDecisionType.DENY) {
                     tool.outcome = ToolExecutionOutcome.BLOCKED;
+                    childRequiresRunTerminal = true;
                 } else if (evaluated.decision() == ToolPolicyDecisionType.REQUIRE_APPROVAL) {
                     tool.outcome = ToolExecutionOutcome.NOT_STARTED;
+                    childRequiresRunTerminal = true;
                 }
             } else if (event instanceof ToolStartedEvent started) {
                 MutableToolDecision tool = requireTool(
@@ -184,6 +226,7 @@ public final class DecisionTraceBuilder {
                         failed.toolName(),
                         failed.errorCode().name()
                 ));
+                childRequiresRunTerminal = true;
             } else if (event instanceof RunCompletedEvent) {
                 terminalCount++;
                 stopReason = AgentStopReason.COMPLETED;
@@ -200,6 +243,9 @@ public final class DecisionTraceBuilder {
         if (terminalCount != 1) {
             throw new IllegalArgumentException("Exactly one terminal run event is required");
         }
+        if (childRequiresRunTerminal) {
+            throw new IllegalArgumentException("A failure or policy decision has no matching run terminal");
+        }
         modelLifecycle.requireClosed();
         AgentEvent lastEvent = snapshot.get(snapshot.size() - 1);
         if (lastEvent.type() != AgentEventType.RUN_COMPLETED
@@ -207,6 +253,9 @@ public final class DecisionTraceBuilder {
                 && lastEvent.type() != AgentEventType.RUN_WAITING_APPROVAL) {
             throw new IllegalArgumentException("The terminal run event must be last");
         }
+        validateDeclaredToolCallCounts(snapshot, modelCompletions, requestedToolCounts);
+        validateMultiToolOrdering(snapshot);
+        validateTerminalCause(snapshot);
         boolean runCompleted = lastEvent.type() == AgentEventType.RUN_COMPLETED;
         AgentStopReason terminalReason = stopReason;
         tools.values().forEach(tool -> tool.requireTerminallyConsistent(runCompleted, terminalReason));
@@ -225,6 +274,183 @@ public final class DecisionTraceBuilder {
                 toolDecisions,
                 errors
         );
+    }
+
+    private void validateMultiToolOrdering(List<AgentEvent> events) {
+        Map<Integer, ToolOrdering> orderings = new LinkedHashMap<>();
+        for (AgentEvent event : events) {
+            if (event instanceof ToolRequestedEvent requested) {
+                orderings.computeIfAbsent(event.iteration(), ignored -> new ToolOrdering())
+                        .request(requested.toolCallId());
+                continue;
+            }
+
+            String toolCallId = toolCallId(event);
+            if (toolCallId == null) {
+                continue;
+            }
+            ToolOrdering ordering = orderings.get(event.iteration());
+            if (ordering == null) {
+                throw new IllegalArgumentException("Tool lifecycle has no ordered request batch");
+            }
+            boolean terminal = event instanceof ToolValidationFailedEvent
+                    || event instanceof ToolSucceededEvent
+                    || event instanceof ToolFailedEvent
+                    || event instanceof ToolPolicyEvaluatedEvent evaluated
+                    && evaluated.decision() != ToolPolicyDecisionType.ALLOW;
+            ordering.lifecycle(toolCallId, terminal);
+        }
+    }
+
+    private String toolCallId(AgentEvent event) {
+        if (event instanceof ToolValidatedEvent value) {
+            return value.toolCallId();
+        }
+        if (event instanceof ToolValidationFailedEvent value) {
+            return value.toolCallId();
+        }
+        if (event instanceof ToolPolicyEvaluatedEvent value) {
+            return value.toolCallId();
+        }
+        if (event instanceof ToolStartedEvent value) {
+            return value.toolCallId();
+        }
+        if (event instanceof ToolSucceededEvent value) {
+            return value.toolCallId();
+        }
+        if (event instanceof ToolFailedEvent value) {
+            return value.toolCallId();
+        }
+        return null;
+    }
+
+    private void validateDeclaredToolCallCounts(
+            List<AgentEvent> events,
+            Map<Integer, ModelCompletion> modelCompletions,
+            Map<Integer, Integer> requestedToolCounts
+    ) {
+        for (Map.Entry<Integer, ModelCompletion> entry : modelCompletions.entrySet()) {
+            ModelCompletedEvent completed = entry.getValue().event();
+            if (completed.finishReason()
+                    != ModelFinishReason.TOOL_CALLS) {
+                continue;
+            }
+            int actualCount = requestedToolCounts.getOrDefault(entry.getKey(), 0);
+            if (actualCount == completed.toolCallCount()) {
+                continue;
+            }
+            int nextIndex = entry.getValue().eventIndex() + 1;
+            boolean modelMiddlewarePostFailure = nextIndex < events.size()
+                    && events.get(nextIndex) instanceof RunStoppedEvent stopped
+                    && stopped.stopReason() == AgentStopReason.INTERNAL_ERROR;
+            if (!modelMiddlewarePostFailure) {
+                throw new IllegalArgumentException(
+                        "TOOL_REQUESTED count does not match the model-declared toolCallCount"
+                );
+            }
+        }
+    }
+
+    private void validateTerminalCause(List<AgentEvent> events) {
+        AgentEvent terminal = events.get(events.size() - 1);
+        AgentEvent cause = events.size() == 1 ? null : events.get(events.size() - 2);
+
+        if (terminal instanceof RunCompletedEvent) {
+            if (!(cause instanceof ModelCompletedEvent completed)
+                    || completed.finishReason()
+                    != ModelFinishReason.STOP) {
+                throw new IllegalArgumentException("RUN_COMPLETED requires a final STOP model turn");
+            }
+            requireSameIteration(terminal, cause);
+            return;
+        }
+        if (terminal instanceof RunWaitingApprovalEvent) {
+            if (!(cause instanceof ToolPolicyEvaluatedEvent evaluated)
+                    || evaluated.decision() != ToolPolicyDecisionType.REQUIRE_APPROVAL) {
+                throw new IllegalArgumentException(
+                        "RUN_WAITING_APPROVAL requires a REQUIRE_APPROVAL policy decision"
+                );
+            }
+            requireSameIteration(terminal, cause);
+            return;
+        }
+
+        RunStoppedEvent stopped = (RunStoppedEvent) terminal;
+        switch (stopped.stopReason()) {
+            case MODEL_ERROR -> {
+                requireCause(cause instanceof ModelFailedEvent,
+                        "MODEL_ERROR requires MODEL_FAILED");
+                requireSameIteration(terminal, cause);
+            }
+            case TOOL_ERROR -> {
+                ToolErrorCode causeCode;
+                if (cause instanceof ToolFailedEvent failed) {
+                    causeCode = failed.errorCode();
+                } else if (cause instanceof ToolValidationFailedEvent failed) {
+                    causeCode = failed.errorCode();
+                } else {
+                    throw new IllegalArgumentException(
+                            "TOOL_ERROR requires TOOL_FAILED or TOOL_VALIDATION_FAILED"
+                    );
+                }
+                requireCause(
+                        causeCode == stopped.toolErrorCode(),
+                        "TOOL_ERROR code must match its tool failure"
+                );
+                requireSameIteration(terminal, cause);
+            }
+            case POLICY_BLOCKED -> {
+                requireCause(cause instanceof ToolPolicyEvaluatedEvent evaluated
+                                && evaluated.decision() == ToolPolicyDecisionType.DENY,
+                        "POLICY_BLOCKED requires a DENY policy decision");
+                requireSameIteration(terminal, cause);
+            }
+            case MAX_ITERATIONS -> {
+                requireCause(cause instanceof ToolSucceededEvent,
+                        "MAX_ITERATIONS requires completion of the final iteration tool work");
+                requireSameIteration(terminal, cause);
+            }
+            case INTERNAL_ERROR -> {
+                requireCause(cause instanceof RunStartedEvent
+                            || cause instanceof ModelCompletedEvent
+                            || cause instanceof ToolSucceededEvent
+                            || cause instanceof ToolPolicyEvaluatedEvent evaluated
+                            && evaluated.decision() == ToolPolicyDecisionType.ALLOW,
+                        "INTERNAL_ERROR must occur at a supported middleware boundary");
+                validateInternalErrorIteration(terminal, cause);
+            }
+            default -> {
+                // Other stop reasons are reserved by the runtime contract for future execution paths.
+            }
+        }
+    }
+
+    private void requireCause(boolean condition, String message) {
+        if (!condition) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    private void requireSameIteration(AgentEvent terminal, AgentEvent cause) {
+        requireCause(
+                terminal.iteration() == cause.iteration(),
+                "Run terminal iteration must match its cause"
+        );
+    }
+
+    private void validateInternalErrorIteration(AgentEvent terminal, AgentEvent cause) {
+        if (cause instanceof RunStartedEvent) {
+            requireCause(terminal.iteration() == 1,
+                    "Initial model middleware failure must stop in iteration 1");
+        } else if (cause instanceof ToolSucceededEvent) {
+            requireCause(
+                    terminal.iteration() == cause.iteration()
+                            || terminal.iteration() == cause.iteration() + 1,
+                    "INTERNAL_ERROR iteration does not match its middleware boundary"
+            );
+        } else {
+            requireSameIteration(terminal, cause);
+        }
     }
 
     private MutableToolDecision requireTool(
@@ -318,6 +544,46 @@ public final class DecisionTraceBuilder {
         SUCCEEDED,
         FAILED,
         VALIDATION_FAILED
+    }
+
+    private record ModelCompletion(ModelCompletedEvent event, int eventIndex) {
+    }
+
+    private static final class ToolOrdering {
+
+        private final List<String> requestedCallIds = new ArrayList<>();
+        private boolean lifecycleStarted;
+        private int nextCallIndex;
+        private String activeCallId;
+
+        private void request(String toolCallId) {
+            if (lifecycleStarted) {
+                throw new IllegalArgumentException(
+                        "All TOOL_REQUESTED events must precede tool execution lifecycle events"
+                );
+            }
+            requestedCallIds.add(toolCallId);
+        }
+
+        private void lifecycle(String toolCallId, boolean terminal) {
+            lifecycleStarted = true;
+            if (activeCallId == null) {
+                if (nextCallIndex >= requestedCallIds.size()
+                        || !requestedCallIds.get(nextCallIndex).equals(toolCallId)) {
+                    throw new IllegalArgumentException(
+                            "Tool lifecycles must follow model request order"
+                    );
+                }
+                activeCallId = toolCallId;
+            } else if (!activeCallId.equals(toolCallId)) {
+                throw new IllegalArgumentException("Tool execution lifecycles must not interleave");
+            }
+
+            if (terminal) {
+                activeCallId = null;
+                nextCallIndex++;
+            }
+        }
     }
 
     private static final class ModelLifecycle {
