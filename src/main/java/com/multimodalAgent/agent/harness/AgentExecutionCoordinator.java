@@ -9,6 +9,14 @@ import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 
 import java.util.Objects;
 
+/**
+ * Application-level boundary that creates one run context and surrounds the Agent core with
+ * {@code aroundRun} middleware.
+ *
+ * <p>Agent events describe core lifecycle facts. If middleware fails after the runner has emitted
+ * {@code RUN_COMPLETED}, this coordinator propagates the middleware-origin failure without
+ * rewriting the completed core outcome or emitting another terminal event.</p>
+ */
 public final class AgentExecutionCoordinator {
 
     private final AgentRunner agentRunner;

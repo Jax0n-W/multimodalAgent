@@ -6,8 +6,17 @@ import com.multimodalAgent.agent.runtime.tool.ToolResult;
 
 /**
  * Transparent, thread-safe extension around runtime operations.
- * Implementations must call {@code next.proceed()} exactly once and return that same result.
- * Per-run mutable state belongs in {@link AgentRuntimeContext#attributes()}.
+ *
+ * <p>Implementations must call {@code next.proceed()} exactly once and return the exact result
+ * instance produced by downstream execution. Middleware must not short-circuit, replace results,
+ * or change core execution semantics. It is intended for concerns such as metrics, tracing,
+ * logging, latency or token observation, and runtime-context enrichment.</p>
+ *
+ * <p>Request rejection, idempotency, locking, admission control, rate limiting, cancellation
+ * prechecks, and cached-result short-circuiting belong to a future execution guard/preflight
+ * boundary, not this middleware API. Implementations may be shared between runs and must therefore
+ * be stateless or thread-safe. Per-run mutable state belongs in
+ * {@link AgentRuntimeContext#attributes()}.</p>
  */
 public interface RuntimeMiddleware {
 

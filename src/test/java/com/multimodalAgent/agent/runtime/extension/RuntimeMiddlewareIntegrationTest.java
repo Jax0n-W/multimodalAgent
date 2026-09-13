@@ -168,7 +168,8 @@ class RuntimeMiddlewareIntegrationTest {
                 new RuntimeMiddlewareChain(List.of(failing))
         );
 
-        assertThrows(RuntimeMiddlewareException.class, () -> coordinator.execute(request(Set.of(), Set.of())));
+        assertThrows(RuntimeMiddlewareFailureException.class,
+                () -> coordinator.execute(request(Set.of(), Set.of())));
         assertEquals(0, model.requests().size());
         assertEquals(List.of(), publisher.events());
     }
@@ -193,7 +194,8 @@ class RuntimeMiddlewareIntegrationTest {
                 new RuntimeMiddlewareChain(List.of(failing))
         );
 
-        assertThrows(RuntimeMiddlewareException.class, () -> coordinator.execute(request(Set.of(), Set.of())));
+        assertThrows(RuntimeMiddlewareFailureException.class,
+                () -> coordinator.execute(request(Set.of(), Set.of())));
         assertEquals(List.of(
                 AgentEventType.RUN_STARTED,
                 AgentEventType.MODEL_STARTED,
@@ -299,6 +301,32 @@ class RuntimeMiddlewareIntegrationTest {
     }
 
     @Test
+    void shouldClassifyRuntimeMiddlewareExceptionThrownByModelAsModelError() {
+        AgentModel model = messages -> {
+            throw new RuntimeMiddlewareException("model exception type collision");
+        };
+
+        Observation observation = execute(
+                model,
+                List.of(),
+                Set.of(),
+                Set.of(),
+                new RuntimeMiddleware() {
+                }
+        );
+
+        assertEquals(AgentStopReason.MODEL_ERROR, observation.result().stopReason());
+        assertEquals(List.of(
+                AgentEventType.RUN_STARTED,
+                AgentEventType.MODEL_STARTED,
+                AgentEventType.MODEL_FAILED,
+                AgentEventType.RUN_STOPPED
+        ), types(observation.events()));
+        assertEquals(AgentStopReason.MODEL_ERROR,
+                TRACE_BUILDER.build(observation.events()).stopReason());
+    }
+
+    @Test
     void shouldClassifyToolMiddlewarePreFailureAsInternalErrorWithoutStartingTool() {
         CountingTool tool = new CountingTool("test_tool", false, false);
         RuntimeMiddleware failing = new RuntimeMiddleware() {
@@ -340,6 +368,32 @@ class RuntimeMiddlewareIntegrationTest {
     @Test
     void shouldPreserveActualToolFailureClassification() {
         CountingTool tool = new CountingTool("test_tool", false, true);
+
+        Observation observation = execute(
+                new ScriptedAgentModel(toolTurn("call-1", "test_tool", "value")),
+                List.of(tool),
+                Set.of("test_tool"),
+                Set.of(),
+                new RuntimeMiddleware() {
+                }
+        );
+
+        assertEquals(AgentStopReason.TOOL_ERROR, observation.result().stopReason());
+        assertEquals(1, tool.executions());
+        assertEquals(ToolErrorCode.EXECUTION_FAILED, observation.result().toolErrorCode());
+        assertEquals(AgentEventType.TOOL_FAILED,
+                observation.events().get(observation.events().size() - 2).type());
+        assertEquals(AgentStopReason.TOOL_ERROR,
+                TRACE_BUILDER.build(observation.events()).stopReason());
+    }
+
+    @Test
+    void shouldClassifyRuntimeMiddlewareExceptionThrownByToolAsToolError() {
+        CountingTool tool = new CountingTool(
+                "test_tool",
+                false,
+                new RuntimeMiddlewareException("tool exception type collision")
+        );
 
         Observation observation = execute(
                 new ScriptedAgentModel(toolTurn("call-1", "test_tool", "value")),
@@ -497,10 +551,22 @@ class RuntimeMiddlewareIntegrationTest {
     private static final class CountingTool implements AgentTool<TestInput, String> {
 
         private final ToolDescriptor<TestInput> descriptor;
-        private final boolean fail;
+        private final RuntimeException failure;
         private final AtomicInteger executions = new AtomicInteger();
 
         private CountingTool(String name, boolean requiresApproval, boolean fail) {
+            this(
+                    name,
+                    requiresApproval,
+                    fail ? new IllegalStateException("tool failed") : null
+            );
+        }
+
+        private CountingTool(
+                String name,
+                boolean requiresApproval,
+                RuntimeException failure
+        ) {
             descriptor = new ToolDescriptor<>(
                     name,
                     "Test tool",
@@ -510,7 +576,7 @@ class RuntimeMiddlewareIntegrationTest {
                     true,
                     requiresApproval
             );
-            this.fail = fail;
+            this.failure = failure;
         }
 
         @Override
@@ -521,8 +587,8 @@ class RuntimeMiddlewareIntegrationTest {
         @Override
         public String execute(TestInput input) {
             executions.incrementAndGet();
-            if (fail) {
-                throw new IllegalStateException("tool failed");
+            if (failure != null) {
+                throw failure;
             }
             return input.query();
         }

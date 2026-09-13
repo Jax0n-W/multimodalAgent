@@ -5,6 +5,11 @@ import com.multimodalAgent.agent.runtime.extension.CancellationContext;
 
 import java.util.Objects;
 
+/**
+ * Application-level input for one coordinated Agent execution.
+ * A request ID may be absent for minimal and test paths; a future production idempotency guard
+ * will own the requirement that production executions provide one.
+ */
 public record AgentExecutionRequest(
         AgentRunSpec runSpec,
         String requestId,

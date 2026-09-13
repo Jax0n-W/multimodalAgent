@@ -97,7 +97,7 @@ class RuntimeMiddlewareChainTest {
             }
         };
 
-        assertThrows(RuntimeMiddlewareException.class, () ->
+        assertThrows(RuntimeMiddlewareFailureException.class, () ->
                 new RuntimeMiddlewareChain(List.of(middleware))
                         .aroundRun(CONTEXT, RuntimeMiddlewareChainTest::runResult));
     }
@@ -117,7 +117,7 @@ class RuntimeMiddlewareChainTest {
             }
         };
 
-        assertThrows(RuntimeMiddlewareException.class, () ->
+        assertThrows(RuntimeMiddlewareFailureException.class, () ->
                 new RuntimeMiddlewareChain(List.of(middleware)).aroundRun(CONTEXT, () -> {
                     coreCalls.incrementAndGet();
                     return runResult();
@@ -138,7 +138,7 @@ class RuntimeMiddlewareChainTest {
             }
         };
 
-        assertThrows(RuntimeMiddlewareException.class, () ->
+        assertThrows(RuntimeMiddlewareFailureException.class, () ->
                 new RuntimeMiddlewareChain(List.of(middleware)).aroundModelCall(
                         CONTEXT,
                         new ModelCallMetadata(1, 1),
@@ -162,7 +162,7 @@ class RuntimeMiddlewareChainTest {
             }
         };
 
-        assertThrows(RuntimeMiddlewareException.class, () ->
+        assertThrows(RuntimeMiddlewareFailureException.class, () ->
                 new RuntimeMiddlewareChain(List.of(middleware)).aroundToolExecution(
                         CONTEXT,
                         new ToolExecutionMetadata("call-1", "tool-1", 1),
@@ -188,7 +188,7 @@ class RuntimeMiddlewareChainTest {
             }
         };
 
-        assertThrows(RuntimeMiddlewareException.class, () ->
+        assertThrows(RuntimeMiddlewareFailureException.class, () ->
                 new RuntimeMiddlewareChain(List.of(middleware)).aroundModelCall(
                         CONTEXT,
                         new ModelCallMetadata(1, 1),
@@ -212,6 +212,47 @@ class RuntimeMiddlewareChainTest {
                 ));
 
         assertSame(modelFailure, thrown);
+    }
+
+    @Test
+    void shouldPreserveDownstreamRuntimeMiddlewareExceptionWithoutOriginRelabeling() {
+        RuntimeMiddlewareException downstreamFailure =
+                new RuntimeMiddlewareException("downstream collision");
+
+        RuntimeMiddlewareException thrown = assertThrows(RuntimeMiddlewareException.class, () ->
+                new RuntimeMiddlewareChain(List.of(new RuntimeMiddleware() {
+                })).aroundModelCall(
+                        CONTEXT,
+                        new ModelCallMetadata(1, 1),
+                        () -> {
+                            throw downstreamFailure;
+                        }
+                ));
+
+        assertSame(downstreamFailure, thrown);
+    }
+
+    @Test
+    void shouldMarkRuntimeMiddlewareExceptionThrownByMiddlewareAsMiddlewareOriginated() {
+        RuntimeMiddlewareException middlewareFailure =
+                new RuntimeMiddlewareException("middleware collision");
+        RuntimeMiddleware middleware = new RuntimeMiddleware() {
+            @Override
+            public AgentRunResult aroundRun(
+                    AgentRuntimeContext context,
+                    RuntimeInvocation<AgentRunResult> next
+            ) {
+                throw middlewareFailure;
+            }
+        };
+
+        RuntimeMiddlewareFailureException thrown = assertThrows(
+                RuntimeMiddlewareFailureException.class,
+                () -> new RuntimeMiddlewareChain(List.of(middleware))
+                        .aroundRun(CONTEXT, RuntimeMiddlewareChainTest::runResult)
+        );
+
+        assertSame(middlewareFailure, thrown.getCause());
     }
 
     private RuntimeMiddlewareChain orderedChain(List<String> calls) {

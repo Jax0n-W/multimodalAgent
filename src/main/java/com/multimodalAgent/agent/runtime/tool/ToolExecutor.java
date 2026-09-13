@@ -12,7 +12,7 @@ import com.multimodalAgent.agent.runtime.event.ToolValidatedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolValidationFailedEvent;
 import com.multimodalAgent.agent.runtime.extension.AgentRuntimeContext;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
-import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareException;
+import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareFailureException;
 import com.multimodalAgent.agent.runtime.extension.ToolExecutionMetadata;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyContext;
@@ -120,7 +120,7 @@ public final class ToolExecutor {
                     )
             );
             return ToolResult.failure(ToolErrorCode.INVALID_ARGUMENTS, exception.getMessage());
-        } catch (RuntimeMiddlewareException exception) {
+        } catch (RuntimeMiddlewareFailureException exception) {
             throw exception;
         } catch (RuntimeException exception) {
             emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.EXECUTION_FAILED);

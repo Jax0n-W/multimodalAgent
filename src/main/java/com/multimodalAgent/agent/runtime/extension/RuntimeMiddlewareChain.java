@@ -10,6 +10,11 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Immutable, reusable composition of transparent runtime middleware.
+ * Middleware-origin failures are marked with {@link RuntimeMiddlewareFailureException}, while
+ * downstream core failures are rethrown unchanged.
+ */
 public final class RuntimeMiddlewareChain {
 
     private static final RuntimeMiddlewareChain EMPTY = new RuntimeMiddlewareChain(List.of());
@@ -127,10 +132,13 @@ public final class RuntimeMiddlewareChain {
             if (guard.downstreamFailure() != null) {
                 throw guard.downstreamFailure();
             }
-            if (exception instanceof RuntimeMiddlewareException middlewareException) {
-                throw middlewareException;
+            if (exception instanceof RuntimeMiddlewareFailureException middlewareFailure) {
+                throw middlewareFailure;
             }
-            throw new RuntimeMiddlewareException(operationName + " middleware failed", exception);
+            throw new RuntimeMiddlewareFailureException(
+                    operationName + " middleware failed",
+                    exception
+            );
         }
     }
 
@@ -154,7 +162,9 @@ public final class RuntimeMiddlewareChain {
         private synchronized T proceed() {
             invocationCount++;
             if (invocationCount != 1) {
-                throw new RuntimeMiddlewareException("next.proceed() must be called exactly once");
+                throw new RuntimeMiddlewareFailureException(
+                        "next.proceed() must be called exactly once"
+                );
             }
             try {
                 downstreamResult = downstream.proceed();
@@ -170,10 +180,14 @@ public final class RuntimeMiddlewareChain {
                 throw new DownstreamInvocationException(downstreamFailure);
             }
             if (invocationCount != 1) {
-                throw new RuntimeMiddlewareException("next.proceed() must be called exactly once");
+                throw new RuntimeMiddlewareFailureException(
+                        "next.proceed() must be called exactly once"
+                );
             }
             if (returned != downstreamResult) {
-                throw new RuntimeMiddlewareException("middleware must return the downstream result");
+                throw new RuntimeMiddlewareFailureException(
+                        "middleware must return the downstream result"
+                );
             }
         }
 

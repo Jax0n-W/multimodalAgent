@@ -13,8 +13,8 @@ import com.multimodalAgent.agent.runtime.event.RunWaitingApprovalEvent;
 import com.multimodalAgent.agent.runtime.event.ToolRequestedEvent;
 import com.multimodalAgent.agent.runtime.extension.AgentRuntimeContext;
 import com.multimodalAgent.agent.runtime.extension.ModelCallMetadata;
+import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareFailureException;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
-import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareException;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
@@ -96,7 +96,7 @@ public final class AgentRunner {
                         new ModelCallMetadata(currentIteration, messages.size()),
                         () -> invokeModel(messages, eventEmitter, currentIteration, invocationState)
                 );
-            } catch (RuntimeMiddlewareException exception) {
+            } catch (RuntimeMiddlewareFailureException exception) {
                 TokenUsage usage = invocationState.completedTurn == null
                         ? totalUsage
                         : totalUsage.plus(invocationState.completedTurn.tokenUsage());
@@ -172,7 +172,7 @@ public final class AgentRunner {
                             runtimeContext,
                             middlewareChain
                     );
-                } catch (RuntimeMiddlewareException exception) {
+                } catch (RuntimeMiddlewareFailureException exception) {
                     return stopForMiddlewareFailure(
                             iteration,
                             toolsUsed,
@@ -314,7 +314,7 @@ public final class AgentRunner {
             TokenUsage tokenUsage,
             AgentEventEmitter eventEmitter,
             int eventIteration,
-            RuntimeMiddlewareException exception
+            RuntimeMiddlewareFailureException exception
     ) {
         AgentRunResult result = stopped(
                 AgentStopReason.INTERNAL_ERROR,
