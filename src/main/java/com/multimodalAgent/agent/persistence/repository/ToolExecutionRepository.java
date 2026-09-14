@@ -12,5 +12,7 @@ public interface ToolExecutionRepository extends JpaRepository<ToolExecutionEnti
 
     List<ToolExecutionEntity> findByToolCallId(String toolCallId);
 
+    Optional<ToolExecutionEntity> findByRunIdAndToolCallId(String runId, String toolCallId);
+
     Optional<ToolExecutionEntity> findByIdempotencyKey(String idempotencyKey);
 }
