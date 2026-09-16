@@ -30,7 +30,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class CoordinationWatchdogConfiguration {
 
     @Bean(destroyMethod = "shutdown")
-    public ScheduledExecutorService runLeaseRenewalExecutor() {
+    public ScheduledExecutorService runLeaseRenewalExecutor(
+            RedisCoordinationProperties properties
+    ) {
         AtomicInteger threadNumber = new AtomicInteger();
         ThreadFactory threadFactory = task -> {
             Thread thread = new Thread(
@@ -40,11 +42,11 @@ public class CoordinationWatchdogConfiguration {
             thread.setDaemon(true);
             return thread;
         };
-        return Executors.newScheduledThreadPool(2, threadFactory);
+        return Executors.newScheduledThreadPool(properties.watchdogThreads(), threadFactory);
     }
 
-    @Bean
-    public LeaseRenewalScheduler leaseRenewalScheduler(
+    @Bean(destroyMethod = "close")
+    public ScheduledExecutorLeaseRenewalScheduler leaseRenewalScheduler(
             ScheduledExecutorService runLeaseRenewalExecutor
     ) {
         return new ScheduledExecutorLeaseRenewalScheduler(runLeaseRenewalExecutor);

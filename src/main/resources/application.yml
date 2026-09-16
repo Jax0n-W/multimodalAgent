@@ -15,6 +15,7 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       database: ${REDIS_DATABASE:0}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
       timeout: ${REDIS_TIMEOUT:2s}
   h2:
     console:
@@ -64,6 +65,13 @@ management:
         include: health,info
 
 multimodal-agent:
+  coordination:
+    redis:
+      enabled: ${REDIS_COORDINATION_ENABLED:false}
+      key-prefix: ${REDIS_COORDINATION_KEY_PREFIX:mma:coord:v1:run}
+      lease-ttl: ${REDIS_COORDINATION_LEASE_TTL:60s}
+      renew-interval: ${REDIS_COORDINATION_RENEW_INTERVAL:20s}
+      watchdog-threads: ${REDIS_COORDINATION_WATCHDOG_THREADS:4}
   ai:
     provider: ${AI_PROVIDER:ollama}
     temperature: ${AI_TEMPERATURE:0.35}

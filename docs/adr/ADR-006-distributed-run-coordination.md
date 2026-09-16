@@ -1,6 +1,6 @@
 # ADR-006: Distributed Run Coordination
 
-- Status: Accepted through P7.4 watchdog and Runtime boundary enforcement
+- Status: Accepted and semantically hardened through P7H
 - Date: 2026-09-16
 
 ## Context and scope
@@ -140,10 +140,12 @@ composition work.
 
 ### Configuration contract
 
-The future Redis adapter is configured by `enabled`, `keyPrefix`, `leaseTtl`, and `renewInterval`.
+The Redis adapter is configured by `enabled`, `keyPrefix`, `leaseTtl`, `renewInterval`, and
+`watchdogThreads`.
 Defaults are disabled, prefix `mma:coord:v1:run`, TTL 60 seconds, and renewal interval 20 seconds.
-Both durations must be positive, the prefix must be non-blank, and three renewal intervals must fit
-within one TTL.
+The watchdog scheduler defaults to four shared daemon threads. Both durations must be positive,
+the prefix must be non-blank, the scheduler capacity must be positive, and three renewal intervals
+must fit within one TTL.
 
 Declaring these properties alone does not enable coordination. When the feature is explicitly
 enabled, Spring may compose the Redis store, one shared renewal scheduler, a watchdog factory, and
@@ -225,6 +227,53 @@ coordination failure is retained as one suppressed diagnostic.
 P7.4 is cooperative fencing at Runtime boundaries. It does not fence external systems called by a
 tool, interrupt an in-flight remote request, recover a lost run, or transfer execution to a new
 owner.
+
+### P7H concurrency and lifecycle invariants
+
+P7H freezes the following coordination invariants:
+
+- `stop()` and renewal are linearized on one watchdog monitor. `stop()` waits for an in-flight
+  renewal, and once it returns no renewal remains inside `RunLeaseStore` and no later scheduled
+  callback can perform a meaningful renewal. Cleanup must preserve the order `stop -> release`.
+- A delayed old-token renewal remains safe after release or re-ownership because Redis renew is an
+  atomic compare-token-and-expire operation. It can neither extend nor delete a new owner's lease.
+- `LOST` is irreversible for an execution. A later healthy Redis response cannot restore authority,
+  and P7 never automatically reacquires a lost lease.
+- `CLOSED` is terminal. Asynchronous renewal and scheduler callbacks use a no-op transition when
+  cleanup has already begun; they cannot produce `CLOSED -> LOST`, revive authority, or leak a
+  lifecycle exception from the callback.
+- Explicit token loss and coordination unavailability remain distinct diagnostics, even though
+  both fail closed and prevent future Core work.
+- Scheduler availability is part of coordination availability. Closing the production scheduler
+  notifies all active watchdogs and transitions their sessions to
+  `LOST(COORDINATION_UNAVAILABLE)`; initial scheduling rejection has the same fail-closed outcome.
+- The shared scheduler is an availability boundary because renewal uses blocking Redis calls. Two
+  threads allow two slow calls to starve every other run, so the conservative default is four and
+  `watchdogThreads` is configurable. This is capacity hardening, not dynamic autoscaling.
+- Stop-before-release safety deliberately waits behind an in-flight Redis renewal. That wait is
+  safe only when Redis operations have bounded completion. Production configuration sets both
+  Lettuce command timeout and connection timeout to 2 seconds. An operation that must first connect
+  and then issue a command is therefore bounded by their sequential budget (approximately four
+  seconds, plus local scheduling overhead), rather than waiting indefinitely.
+- Context contributors enrich the one existing `AgentRuntimeContext` in request order, exactly once
+  per execution. They cannot replace the context or execute Core work. A contributor failure before
+  Core start produces no Core events; the outer coordination shell still stops renewal, releases
+  the lease, and closes the session.
+- Middleware orders 100 (coordination) and 200 (persistence) are semantic contracts, not incidental
+  values. The real invocation order is coordination pre-check, persistence pre-check, Core,
+  persistence post-check, coordination post-check. Equal middleware orders retain registration
+  order through the extension kernel's stable sort.
+- Persistence/coordination failure precedence is timing-independent. When both exist for an
+  already-started operation, `ExecutionPersistenceException` remains primary. Coordination
+  observations are suppressed diagnostics. Duplicate observations of the same explicit ownership
+  loss are collapsed, while distinct unavailable failures from session, watchdog-stop, and release
+  origins are retained.
+- A completed Model or Tool operation keeps its truthful Core terminal event even when persistence
+  or coordination fails at the following safe boundary. Future Model or Tool work is fail-stopped;
+  established facts are never rewritten.
+- Scheduler shutdown, slow renewal, and shared capacity affect availability only. They do not make
+  Redis an execution-truth authority and do not introduce recovery, replay, takeover, or external
+  side-effect fencing.
 
 ### Deferred concerns
 

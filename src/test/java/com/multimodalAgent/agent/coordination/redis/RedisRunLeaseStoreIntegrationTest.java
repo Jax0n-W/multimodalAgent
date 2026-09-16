@@ -2,9 +2,14 @@ package com.multimodalAgent.agent.coordination.redis;
 
 import com.multimodalAgent.agent.coordination.RunLease;
 import com.multimodalAgent.agent.coordination.RunLeaseAcquireResult;
+import com.multimodalAgent.agent.coordination.RunLeaseFailureKind;
 import com.multimodalAgent.agent.coordination.RunLeaseReleaseResult;
 import com.multimodalAgent.agent.coordination.RunLeaseRenewResult;
+import com.multimodalAgent.agent.coordination.RunLeaseSession;
+import com.multimodalAgent.agent.coordination.RunLeaseState;
 import com.multimodalAgent.agent.coordination.config.RedisCoordinationProperties;
+import com.multimodalAgent.agent.coordination.watchdog.LeaseRenewalScheduler;
+import com.multimodalAgent.agent.coordination.watchdog.RunLeaseWatchdog;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -220,6 +225,71 @@ class RedisRunLeaseStoreIntegrationTest {
     }
 
     @Test
+    void staleWatchdogRenewMustLoseAuthorityWithoutTouchingTheNewOwner() throws Exception {
+        RunLease oldOwner = acquire("R1");
+        RunLeaseSession oldSession = new RunLeaseSession(oldOwner);
+        ControlledScheduler scheduler = new ControlledScheduler();
+        RunLeaseWatchdog watchdog = new RunLeaseWatchdog(
+                store,
+                oldSession,
+                scheduler,
+                Duration.ofMillis(100)
+        );
+        watchdog.start();
+        String key = keyFactory.leaseKey("R1");
+        redisTemplate.delete(key);
+        RunLease newOwner = acquire("R1");
+        Thread.sleep(100);
+        long before = pttl(key);
+
+        scheduler.tick();
+        long after = pttl(key);
+
+        assertEquals(RunLeaseState.LOST, oldSession.state());
+        assertEquals(
+                RunLeaseFailureKind.EXPLICIT_LEASE_LOSS,
+                oldSession.firstFailure().orElseThrow()
+        );
+        assertEquals(newOwner.leaseToken(), redisTemplate.opsForValue().get(key));
+        assertTrue(after <= before, "the stale watchdog must not extend the new owner's TTL");
+    }
+
+    @Test
+    void renewalAtTheTtlEdgeMustRemainOwnershipSafeForEitherAtomicOutcome() throws Exception {
+        Duration edgeTtl = Duration.ofMillis(400);
+        RedisCoordinationProperties edgeProperties = properties("test:edge", edgeTtl);
+        RedisRunLeaseStore edgeStore = new RedisRunLeaseStore(redisTemplate, edgeProperties);
+        RedisCoordinationKeyFactory edgeKeys = new RedisCoordinationKeyFactory(edgeProperties);
+        RunLease lease = acquired(edgeStore.tryAcquire("R1"));
+        RunLeaseSession session = new RunLeaseSession(lease);
+        ControlledScheduler scheduler = new ControlledScheduler();
+        RunLeaseWatchdog watchdog = new RunLeaseWatchdog(
+                edgeStore,
+                session,
+                scheduler,
+                Duration.ofMillis(100)
+        );
+        watchdog.start();
+        Thread.sleep(360);
+
+        scheduler.tick();
+
+        String value = redisTemplate.opsForValue().get(edgeKeys.leaseKey("R1"));
+        if (session.state() == RunLeaseState.ACTIVE) {
+            assertEquals(lease.leaseToken(), value);
+            assertPositiveTtlWithin(edgeKeys.leaseKey("R1"), edgeTtl);
+            watchdog.stop();
+        } else {
+            assertEquals(RunLeaseState.LOST, session.state());
+            assertEquals(
+                    RunLeaseFailureKind.EXPLICIT_LEASE_LOSS,
+                    session.firstFailure().orElseThrow()
+            );
+            assertNull(value);
+        }
+    }
+
+    @Test
     void shouldAllowALeaseToExpireNaturally() throws Exception {
         RedisCoordinationProperties shortProperties = properties(
                 "test:short",
@@ -308,5 +378,23 @@ class RedisRunLeaseStoreIntegrationTest {
 
     private RedisCoordinationProperties properties(String prefix, Duration ttl) {
         return new RedisCoordinationProperties(true, prefix, ttl, ttl.dividedBy(4));
+    }
+
+    private static final class ControlledScheduler implements LeaseRenewalScheduler {
+
+        private Runnable task;
+        private boolean cancelled;
+
+        @Override
+        public ScheduledRenewal scheduleWithFixedDelay(Runnable task, Duration interval) {
+            this.task = task;
+            return () -> cancelled = true;
+        }
+
+        private void tick() {
+            if (!cancelled) {
+                task.run();
+            }
+        }
     }
 }

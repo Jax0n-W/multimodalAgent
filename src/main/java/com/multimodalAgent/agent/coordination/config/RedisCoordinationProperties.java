@@ -14,8 +14,18 @@ public record RedisCoordinationProperties(
         @DefaultValue("false") boolean enabled,
         @DefaultValue("mma:coord:v1:run") String keyPrefix,
         @DefaultValue("60s") Duration leaseTtl,
-        @DefaultValue("20s") Duration renewInterval
+        @DefaultValue("20s") Duration renewInterval,
+        @DefaultValue("4") int watchdogThreads
 ) {
+
+    public RedisCoordinationProperties(
+            boolean enabled,
+            String keyPrefix,
+            Duration leaseTtl,
+            Duration renewInterval
+    ) {
+        this(enabled, keyPrefix, leaseTtl, renewInterval, 4);
+    }
 
     public RedisCoordinationProperties {
         if (keyPrefix == null || keyPrefix.isBlank()) {
@@ -28,6 +38,9 @@ public record RedisCoordinationProperties(
                     "renewInterval must be at most one third of leaseTtl"
             );
         }
+        if (watchdogThreads < 1) {
+            throw new IllegalArgumentException("watchdogThreads must be at least 1");
+        }
     }
 
     public static RedisCoordinationProperties defaults() {
@@ -35,7 +48,8 @@ public record RedisCoordinationProperties(
                 false,
                 "mma:coord:v1:run",
                 Duration.ofSeconds(60),
-                Duration.ofSeconds(20)
+                Duration.ofSeconds(20),
+                4
         );
     }
 

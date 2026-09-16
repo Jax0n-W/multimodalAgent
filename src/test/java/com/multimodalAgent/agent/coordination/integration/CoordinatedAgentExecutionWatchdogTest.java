@@ -139,6 +139,34 @@ class CoordinatedAgentExecutionWatchdogTest {
     }
 
     @Test
+    void distinctUnavailableFailuresFromRenewAndReleaseMustBothRemainDiagnostic() {
+        List<String> order = new ArrayList<>();
+        FakeStore store = new FakeStore(order);
+        store.renewResult = RunLeaseRenewResult.COORDINATION_UNAVAILABLE;
+        store.releaseFailure = new IllegalStateException("release transport failed");
+        ControlledScheduler scheduler = new ControlledScheduler(order);
+        ExecutionPersistenceException persistenceFailure =
+                new ExecutionPersistenceException("persistence failed");
+
+        ExecutionPersistenceException actual = assertThrows(
+                ExecutionPersistenceException.class,
+                () -> coordinator(store, scheduler, request -> {
+                    scheduler.tick();
+                    throw persistenceFailure;
+                }).execute(request())
+        );
+
+        assertSame(persistenceFailure, actual);
+        assertEquals(2, actual.getSuppressed().length);
+        assertInstanceOf(CoordinationUnavailableException.class, actual.getSuppressed()[0]);
+        CoordinationUnavailableException releaseFailure = assertInstanceOf(
+                CoordinationUnavailableException.class,
+                actual.getSuppressed()[1]
+        );
+        assertSame(store.releaseFailure, releaseFailure.getCause());
+    }
+
+    @Test
     void terminalSuccessSurvivesReleaseUnavailable() {
         List<String> order = new ArrayList<>();
         FakeStore store = new FakeStore(order);
@@ -282,6 +310,7 @@ class CoordinatedAgentExecutionWatchdogTest {
         private final List<String> order;
         private RunLeaseRenewResult renewResult = RunLeaseRenewResult.RENEWED;
         private RunLeaseReleaseResult releaseResult = RunLeaseReleaseResult.RELEASED;
+        private RuntimeException releaseFailure;
         private int releaseCalls;
 
         private FakeStore(List<String> order) {
@@ -303,6 +332,9 @@ class CoordinatedAgentExecutionWatchdogTest {
         public RunLeaseReleaseResult release(RunLease lease) {
             releaseCalls++;
             order.add("release");
+            if (releaseFailure != null) {
+                throw releaseFailure;
+            }
             return releaseResult;
         }
     }

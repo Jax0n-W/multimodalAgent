@@ -179,9 +179,15 @@ public final class CoordinatedAgentExecutionCoordinator {
             }
         }
         if (primaryFailure != null) {
-            addSuppressedUnlessEquivalent(primaryFailure, executionLoss);
-            addSuppressedUnlessEquivalent(primaryFailure, stopFailure);
-            addSuppressedUnlessEquivalent(primaryFailure, releaseFailure);
+            addSuppressedUnlessEquivalent(primaryFailure, executionLoss, FailureOrigin.SESSION);
+            addSuppressedUnlessEquivalent(primaryFailure, stopFailure, FailureOrigin.WATCHDOG_STOP);
+            if (!sameExplicitOwnershipLoss(executionLoss, releaseFailure)) {
+                addSuppressedUnlessEquivalent(
+                        primaryFailure,
+                        releaseFailure,
+                        FailureOrigin.RELEASE
+                );
+            }
         }
     }
 
@@ -226,18 +232,33 @@ public final class CoordinatedAgentExecutionCoordinator {
 
     private void addSuppressedUnlessEquivalent(
             Throwable primary,
-            ExecutionCoordinationException secondary
+            ExecutionCoordinationException secondary,
+            FailureOrigin origin
     ) {
-        if (secondary == null || primary == secondary
-                || primary.getClass().equals(secondary.getClass())) {
+        if (secondary == null || primary == secondary) {
+            return;
+        }
+        if (origin == FailureOrigin.SESSION
+                && primary instanceof ExecutionCoordinationException coordinationPrimary
+                && coordinationPrimary.getClass().equals(secondary.getClass())
+                && coordinationPrimary.runId().equals(secondary.runId())) {
             return;
         }
         for (Throwable existing : primary.getSuppressed()) {
-            if (existing.getClass().equals(secondary.getClass())) {
+            if (existing == secondary) {
                 return;
             }
         }
         primary.addSuppressed(secondary);
+    }
+
+    private boolean sameExplicitOwnershipLoss(
+            ExecutionCoordinationException executionLoss,
+            ExecutionCoordinationException releaseFailure
+    ) {
+        return executionLoss instanceof RunLeaseLostException
+                && releaseFailure instanceof RunLeaseLostException
+                && executionLoss.runId().equals(releaseFailure.runId());
     }
 
     private ExecutionCoordinationException release(RunLeaseSession session) {
@@ -281,5 +302,11 @@ public final class CoordinatedAgentExecutionCoordinator {
                             + " (" + observerFailure.getClass().getSimpleName() + ")"
             );
         }
+    }
+
+    private enum FailureOrigin {
+        SESSION,
+        WATCHDOG_STOP,
+        RELEASE
     }
 }

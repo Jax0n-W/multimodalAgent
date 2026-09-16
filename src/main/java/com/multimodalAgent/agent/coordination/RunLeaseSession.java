@@ -48,6 +48,21 @@ public final class RunLeaseSession {
         throw illegalTransition(state, RunLeaseState.LOST);
     }
 
+    /**
+     * Best-effort transition for asynchronous infrastructure callbacks.
+     * A callback that arrives after ownership cleanup has begun must not reopen or corrupt the
+     * terminal lifecycle, and therefore observes a no-op outside {@link RunLeaseState#ACTIVE}.
+     */
+    public synchronized boolean markLostIfActive(RunLeaseFailureKind failureKind) {
+        Objects.requireNonNull(failureKind, "failureKind must not be null");
+        if (state != RunLeaseState.ACTIVE) {
+            return false;
+        }
+        firstFailure = failureKind;
+        state = RunLeaseState.LOST;
+        return true;
+    }
+
     public synchronized void beginClosing() {
         if (state == RunLeaseState.ACTIVE || state == RunLeaseState.LOST) {
             state = RunLeaseState.CLOSING;

@@ -7,6 +7,19 @@ public interface LeaseRenewalScheduler {
 
     ScheduledRenewal scheduleWithFixedDelay(Runnable task, Duration interval);
 
+    /**
+     * Schedules renewal and supplies a fail-closed callback for scheduler lifecycle loss.
+     * Implementations that cannot observe their own lifecycle retain the original scheduling
+     * contract; production schedulers should override this method.
+     */
+    default ScheduledRenewal scheduleWithFixedDelay(
+            Runnable task,
+            Runnable onSchedulerUnavailable,
+            Duration interval
+    ) {
+        return scheduleWithFixedDelay(task, interval);
+    }
+
     @FunctionalInterface
     interface ScheduledRenewal {
 

@@ -9,9 +9,12 @@ import com.multimodalAgent.agent.runtime.extension.AgentRuntimeContext;
 import com.multimodalAgent.agent.runtime.extension.ModelCallMetadata;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareFailureException;
+import com.multimodalAgent.agent.runtime.extension.RuntimeMiddleware;
+import com.multimodalAgent.agent.runtime.extension.RuntimeInvocation;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -25,6 +28,47 @@ class ExecutionBoundaryMiddlewareOrderingTest {
     void coordinationMustBeOutsidePersistenceByOrder() {
         assertEquals(100, ExecutionCoordinationBoundaryMiddleware.ORDER);
         assertEquals(200, ExecutionPersistenceBoundaryMiddleware.ORDER);
+    }
+
+    @Test
+    void actualBoundariesMustInvokeCoordinationThenPersistenceThenCoreAndUnwindInReverse() {
+        Fixture fixture = fixture();
+        List<String> trace = new ArrayList<>();
+        RuntimeMiddleware coordination = traced(
+                "coordination",
+                new ExecutionCoordinationBoundaryMiddleware(),
+                trace
+        );
+        RuntimeMiddleware persistence = traced(
+                "persistence",
+                new ExecutionPersistenceBoundaryMiddleware(fixture.failures),
+                trace
+        );
+        RuntimeMiddlewareChain chain = new RuntimeMiddlewareChain(List.of(
+                persistence,
+                coordination
+        ));
+
+        chain.aroundModelCall(
+                fixture.context,
+                new ModelCallMetadata(1, 1),
+                () -> {
+                    trace.add("core");
+                    return ModelTurn.finalAnswer("done");
+                }
+        );
+
+        assertEquals(
+                List.of(
+                        "coordination-pre",
+                        "persistence-pre",
+                        "core",
+                        "persistence-post",
+                        "coordination-post"
+                ),
+                trace
+        );
+        fixture.close();
     }
 
     @Test
@@ -95,6 +139,31 @@ class ExecutionBoundaryMiddlewareOrderingTest {
                 new ExecutionCoordinationBoundaryMiddleware()
         ));
         return new Fixture(failures, session, context, chain);
+    }
+
+    private RuntimeMiddleware traced(
+            String name,
+            RuntimeMiddleware delegate,
+            List<String> trace
+    ) {
+        return new RuntimeMiddleware() {
+            @Override
+            public int order() {
+                return delegate.order();
+            }
+
+            @Override
+            public ModelTurn aroundModelCall(
+                    AgentRuntimeContext context,
+                    ModelCallMetadata metadata,
+                    RuntimeInvocation<ModelTurn> next
+            ) {
+                trace.add(name + "-pre");
+                ModelTurn result = delegate.aroundModelCall(context, metadata, next);
+                trace.add(name + "-post");
+                return result;
+            }
+        };
     }
 
     private record Fixture(

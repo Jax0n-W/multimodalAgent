@@ -6,16 +6,19 @@ import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.runtime.extension.AgentRuntimeContext;
+import com.multimodalAgent.agent.runtime.extension.CancellationContext;
 import com.multimodalAgent.agent.runtime.extension.ModelCallMetadata;
 import com.multimodalAgent.agent.runtime.extension.RuntimeInvocation;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddleware;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.extension.ToolExecutionMetadata;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
+import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
 import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
+import com.multimodalAgent.agent.runtime.event.RecordingAgentEventPublisher;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
@@ -28,13 +31,17 @@ import jakarta.validation.Validation;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentExecutionCoordinatorTest {
 
@@ -128,6 +135,116 @@ class AgentExecutionCoordinatorTest {
         assertEquals(new ModelCallMetadata(1, 1), modelMetadata.get());
         assertEquals(new ToolExecutionMetadata("call-context", "context_tool", 1),
                 toolMetadata.get());
+    }
+
+    @Test
+    void contributorsMustEnrichOneContextExactlyOnceInRequestOrder() {
+        List<String> order = new ArrayList<>();
+        AtomicReference<AgentRuntimeContext> sharedContext = new AtomicReference<>();
+        List<AgentRuntimeContextContributor> contributors = List.of(
+                context -> {
+                    sharedContext.set(context);
+                    order.add("A");
+                },
+                context -> {
+                    assertSame(sharedContext.get(), context);
+                    order.add("B");
+                },
+                context -> {
+                    assertSame(sharedContext.get(), context);
+                    order.add("C");
+                }
+        );
+        AgentExecutionRequest request = directRequest(contributors);
+        RecordingAgentEventPublisher publisher = new RecordingAgentEventPublisher();
+
+        AgentRunResult result = directCoordinator(
+                ignored -> ModelTurn.finalAnswer("done"),
+                publisher
+        ).execute(request);
+
+        assertEquals(AgentStopReason.COMPLETED, result.stopReason());
+        assertEquals(List.of("A", "B", "C"), order);
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> request.runtimeContextContributors().add(context -> {
+                })
+        );
+    }
+
+    @Test
+    void contributorFailureMustStopLaterContributorsBeforeCoreStarts() {
+        List<String> order = new ArrayList<>();
+        AtomicInteger modelCalls = new AtomicInteger();
+        IllegalStateException failure = new IllegalStateException("contributor failed");
+        AgentExecutionRequest request = directRequest(List.of(
+                context -> order.add("A"),
+                context -> {
+                    order.add("B");
+                    throw failure;
+                },
+                context -> order.add("C")
+        ));
+        RecordingAgentEventPublisher publisher = new RecordingAgentEventPublisher();
+        AgentExecutionCoordinator coordinator = directCoordinator(requestIgnored -> {
+            modelCalls.incrementAndGet();
+            return ModelTurn.finalAnswer("must not run");
+        }, publisher);
+
+        IllegalStateException actual = assertThrows(
+                IllegalStateException.class,
+                () -> coordinator.execute(request)
+        );
+
+        assertSame(failure, actual);
+        assertEquals(List.of("A", "B"), order);
+        assertEquals(0, modelCalls.get());
+        assertTrue(publisher.events().isEmpty());
+    }
+
+    private AgentExecutionRequest directRequest(
+            List<AgentRuntimeContextContributor> contributors
+    ) {
+        return new AgentExecutionRequest(
+                new AgentRunSpec(
+                        "run-contributors",
+                        "session-contributors",
+                        List.of(AgentMessage.user("run")),
+                        2,
+                        Set.of(),
+                        Set.of()
+                ),
+                "request-contributors",
+                42L,
+                null,
+                CancellationContext.NONE,
+                contributors
+        );
+    }
+
+    private AgentExecutionCoordinator directCoordinator(
+            AgentModel model,
+            RecordingAgentEventPublisher publisher
+    ) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        ToolExecutor executor = new ToolExecutor(
+                new ToolRegistry(List.of()),
+                new ToolArgumentResolver(
+                        objectMapper,
+                        Validation.buildDefaultValidatorFactory().getValidator()
+                ),
+                new DefaultToolPolicyEngine(),
+                objectMapper
+        );
+        return new AgentExecutionCoordinator(
+                new AgentRunner(
+                        model,
+                        executor,
+                        TestModelToolDefinitionProjector.INSTANCE,
+                        publisher
+                ),
+                RuntimeMiddlewareChain.empty()
+        );
     }
 
     private record ContextInput(@NotBlank String query) {

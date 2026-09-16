@@ -4,7 +4,6 @@ import com.multimodalAgent.agent.coordination.CoordinationUnavailableException;
 import com.multimodalAgent.agent.coordination.RunLeaseFailureKind;
 import com.multimodalAgent.agent.coordination.RunLeaseRenewResult;
 import com.multimodalAgent.agent.coordination.RunLeaseSession;
-import com.multimodalAgent.agent.coordination.RunLeaseState;
 import com.multimodalAgent.agent.coordination.RunLeaseStore;
 
 import java.time.Duration;
@@ -50,7 +49,11 @@ public final class RunLeaseWatchdog {
         LeaseRenewalScheduler.ScheduledRenewal scheduled;
         try {
             scheduled = Objects.requireNonNull(
-                    scheduler.scheduleWithFixedDelay(this::renewSafely, renewInterval),
+                    scheduler.scheduleWithFixedDelay(
+                            this::renewSafely,
+                            this::schedulerUnavailableSafely,
+                            renewInterval
+                    ),
                     "scheduler returned null"
             );
         } catch (RuntimeException exception) {
@@ -85,6 +88,7 @@ public final class RunLeaseWatchdog {
     private synchronized void renewSafely() {
         if (lifecycle != Lifecycle.RUNNING || !session.hasExecutionAuthority()) {
             lifecycle = Lifecycle.STOPPED;
+            cancelAfterLoss();
             return;
         }
         RunLeaseRenewResult result;
@@ -102,10 +106,14 @@ public final class RunLeaseWatchdog {
             return;
         }
         if (result == RunLeaseRenewResult.RENEWED) {
+            if (!session.hasExecutionAuthority()) {
+                lifecycle = Lifecycle.STOPPED;
+                cancelAfterLoss();
+            }
             return;
         }
         if (result == RunLeaseRenewResult.EXPLICIT_LEASE_LOSS) {
-            session.markLost(RunLeaseFailureKind.EXPLICIT_LEASE_LOSS);
+            session.markLostIfActive(RunLeaseFailureKind.EXPLICIT_LEASE_LOSS);
         } else {
             markUnavailable();
         }
@@ -114,9 +122,16 @@ public final class RunLeaseWatchdog {
     }
 
     private void markUnavailable() {
-        if (session.state() == RunLeaseState.ACTIVE) {
-            session.markLost(RunLeaseFailureKind.COORDINATION_UNAVAILABLE);
+        session.markLostIfActive(RunLeaseFailureKind.COORDINATION_UNAVAILABLE);
+    }
+
+    private synchronized void schedulerUnavailableSafely() {
+        if (lifecycle != Lifecycle.RUNNING) {
+            return;
         }
+        markUnavailable();
+        lifecycle = Lifecycle.STOPPED;
+        cancelAfterLoss();
     }
 
     private void cancelScheduledRenewal(LeaseRenewalScheduler.ScheduledRenewal scheduled) {
