@@ -128,6 +128,23 @@ effects. Redis coordination is deferred because durable history does not require
 authority. Idempotency enforcement is deferred to the phase that defines admission/replay behavior;
 P6 only preserves the existing request and tool correlation fields.
 
+### P6H hardening invariants
+
+`ExecutionPersistenceComposition` is the production composition root. Its event publisher,
+boundary middleware, and persistent coordinator share one object-identical
+`ExecutionPersistenceFailureRegistry`; callers must obtain the three participants from that root
+instead of assembling independent registries.
+
+The persistence projector keeps an explicit allow-list equal to the complete sealed `AgentEvent`
+hierarchy. An event class without an explicit projection fails closed with
+`IllegalArgumentException`; it is never acknowledged by merely flushing the Run row.
+
+If a real Core failure and a persistence failure occur in the same execution, both truths remain
+distinct: Core still emits `MODEL_FAILED`/`RUN_STOPPED(MODEL_ERROR)` or
+`TOOL_FAILED`/`RUN_STOPPED(TOOL_ERROR)`, while the outer durable boundary gives the previously
+recorded `ExecutionPersistenceException` precedence for the caller. Caller precedence never
+rewrites Core events.
+
 ### Enforcement and test contract
 
 ArchUnit rejects any dependency from `agent.runtime..` to persistence/repository/application

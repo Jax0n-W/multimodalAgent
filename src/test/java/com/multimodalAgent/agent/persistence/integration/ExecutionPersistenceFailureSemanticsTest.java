@@ -36,6 +36,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -44,6 +45,26 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ExecutionPersistenceFailureSemanticsTest {
+
+    @Test
+    void compositionMustShareFailureAcrossPublisherMiddlewareAndCoordinator() {
+        FaultInjectingStore store = FaultInjectingStore.failOn(AgentEventType.TOOL_REQUESTED);
+        CountingModel model = new CountingModel(
+                ModelTurn.toolCall(call("composition-call", "safe_tool"))
+        );
+        CountingTool tool = new CountingTool();
+        Harness harness = harness(store, model, List.of(tool));
+
+        assertThrows(ExecutionPersistenceException.class, () ->
+                harness.coordinator().execute(request("composition", Set.of(tool.name())))
+        );
+
+        assertEquals(1, model.calls());
+        assertEquals(0, tool.executions());
+        assertEvent(harness, AgentEventType.TOOL_REQUESTED);
+        assertNoEvent(harness, AgentEventType.TOOL_STARTED);
+        assertInfrastructureStop(harness);
+    }
 
     @Test
     void preRunAdmissionFailureMustPreventCoreFromStarting() {
@@ -181,19 +202,59 @@ class ExecutionPersistenceFailureSemanticsTest {
         assertNoEvent(harness, AgentEventType.RUN_STOPPED);
     }
 
+    @Test
+    void modelFailureMustRemainCoreTruthWhilePersistenceFailureWinsForCaller() {
+        FaultInjectingStore store = FaultInjectingStore.failOn(AgentEventType.MODEL_STARTED);
+        AtomicInteger modelCalls = new AtomicInteger();
+        AgentModel failingModel = request -> {
+            modelCalls.incrementAndGet();
+            throw new IllegalStateException("actual model failure");
+        };
+        Harness harness = harness(store, failingModel, List.of());
+
+        assertThrows(ExecutionPersistenceException.class, () ->
+                harness.coordinator().execute(request("model-dual-failure", Set.of()))
+        );
+
+        assertEquals(1, modelCalls.get());
+        assertEvent(harness, AgentEventType.MODEL_STARTED);
+        assertEvent(harness, AgentEventType.MODEL_FAILED);
+        assertNoEvent(harness, AgentEventType.MODEL_COMPLETED);
+        assertRunStopReason(harness, AgentStopReason.MODEL_ERROR);
+    }
+
+    @Test
+    void toolFailureMustRemainCoreTruthWhilePersistenceFailureWinsForCaller() {
+        FaultInjectingStore store = FaultInjectingStore.failOn(AgentEventType.TOOL_STARTED);
+        CountingModel model = new CountingModel(
+                ModelTurn.toolCall(call("dual-tool-call", "safe_tool"))
+        );
+        CountingTool tool = new CountingTool(true);
+        Harness harness = harness(store, model, List.of(tool));
+
+        assertThrows(ExecutionPersistenceException.class, () ->
+                harness.coordinator().execute(request("tool-dual-failure", Set.of(tool.name())))
+        );
+
+        assertEquals(1, model.calls());
+        assertEquals(1, tool.executions());
+        assertEvent(harness, AgentEventType.TOOL_STARTED);
+        assertEvent(harness, AgentEventType.TOOL_FAILED);
+        assertNoEvent(harness, AgentEventType.TOOL_SUCCEEDED);
+        assertRunStopReason(harness, AgentStopReason.TOOL_ERROR);
+    }
+
     private Harness harness(
             ExecutionHistoryStore store,
             AgentModel model,
             List<? extends AgentTool<?, ?>> tools
     ) {
-        ExecutionPersistenceFailureRegistry failures =
-                new ExecutionPersistenceFailureRegistry();
-        ExecutionPersistenceEventPublisher persistencePublisher =
-                new ExecutionPersistenceEventPublisher(store, failures);
+        ExecutionPersistenceComposition composition =
+                new ExecutionPersistenceComposition(store);
         RecordingAgentEventPublisher recordingPublisher = new RecordingAgentEventPublisher();
         AgentEventPublisher publisher = event -> {
             recordingPublisher.publish(event);
-            persistencePublisher.publish(event);
+            composition.eventPublisher().publish(event);
         };
         ObjectMapper objectMapper = new ObjectMapper();
         ToolExecutor executor = new ToolExecutor(
@@ -206,7 +267,7 @@ class ExecutionPersistenceFailureSemanticsTest {
                 objectMapper
         );
         RuntimeMiddlewareChain middleware = new RuntimeMiddlewareChain(List.of(
-                new ExecutionPersistenceBoundaryMiddleware(failures)
+                composition.boundaryMiddleware()
         ));
         AgentRunner runner = new AgentRunner(
                 model,
@@ -217,7 +278,7 @@ class ExecutionPersistenceFailureSemanticsTest {
         AgentExecutionCoordinator coreCoordinator =
                 new AgentExecutionCoordinator(runner, middleware);
         return new Harness(
-                new PersistentAgentExecutionCoordinator(coreCoordinator, store, failures),
+                composition.persistentCoordinator(coreCoordinator),
                 recordingPublisher
         );
     }
@@ -259,6 +320,17 @@ class ExecutionPersistenceFailureSemanticsTest {
         assertTrue(stopped.stopReason() != AgentStopReason.TOOL_ERROR);
     }
 
+    private void assertRunStopReason(
+            Harness harness,
+            AgentStopReason expected
+    ) {
+        RunStoppedEvent stopped = assertInstanceOf(
+                RunStoppedEvent.class,
+                harness.events().events().get(harness.events().events().size() - 1)
+        );
+        assertEquals(expected, stopped.stopReason());
+    }
+
     private record Harness(
             PersistentAgentExecutionCoordinator coordinator,
             RecordingAgentEventPublisher events
@@ -270,7 +342,16 @@ class ExecutionPersistenceFailureSemanticsTest {
 
     private static final class CountingTool implements AgentTool<ToolInput, String> {
 
+        private final boolean fail;
         private int executions;
+
+        private CountingTool() {
+            this(false);
+        }
+
+        private CountingTool(boolean fail) {
+            this.fail = fail;
+        }
 
         @Override
         public ToolDescriptor<ToolInput> descriptor() {
@@ -288,6 +369,9 @@ class ExecutionPersistenceFailureSemanticsTest {
         @Override
         public String execute(ToolInput input) {
             executions++;
+            if (fail) {
+                throw new IllegalStateException("actual tool failure");
+            }
             return "tool succeeded";
         }
 

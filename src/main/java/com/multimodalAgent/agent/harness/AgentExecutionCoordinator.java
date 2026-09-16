@@ -45,6 +45,9 @@ public final class AgentExecutionCoordinator {
                 request.cancellationContext(),
                 new RuntimeAttributes()
         );
+        for (AgentRuntimeContextContributor contributor : request.runtimeContextContributors()) {
+            contributor.contribute(context);
+        }
         return middlewareChain.aroundRun(
                 context,
                 () -> agentRunner.run(spec, context, middlewareChain)

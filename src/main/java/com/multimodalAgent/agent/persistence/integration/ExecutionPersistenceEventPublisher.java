@@ -13,7 +13,7 @@ public final class ExecutionPersistenceEventPublisher implements AgentEventPubli
     private final ExecutionHistoryStore store;
     private final ExecutionPersistenceFailureRegistry failures;
 
-    public ExecutionPersistenceEventPublisher(
+    ExecutionPersistenceEventPublisher(
             ExecutionHistoryStore store,
             ExecutionPersistenceFailureRegistry failures
     ) {

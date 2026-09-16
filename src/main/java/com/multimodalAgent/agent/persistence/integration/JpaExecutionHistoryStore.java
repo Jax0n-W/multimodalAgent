@@ -39,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -46,6 +47,23 @@ import java.util.UUID;
  */
 @Component
 public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
+
+    private static final Set<Class<?>> SUPPORTED_EVENT_CLASSES = Set.of(
+            RunStartedEvent.class,
+            ModelStartedEvent.class,
+            ModelCompletedEvent.class,
+            ModelFailedEvent.class,
+            ToolRequestedEvent.class,
+            ToolValidatedEvent.class,
+            ToolValidationFailedEvent.class,
+            ToolPolicyEvaluatedEvent.class,
+            ToolStartedEvent.class,
+            ToolSucceededEvent.class,
+            ToolFailedEvent.class,
+            RunWaitingApprovalEvent.class,
+            RunCompletedEvent.class,
+            RunStoppedEvent.class
+    );
 
     private final AgentRunRepository runRepository;
     private final AgentStepRepository stepRepository;
@@ -86,6 +104,9 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(AgentEvent event) {
         Objects.requireNonNull(event, "event must not be null");
+        if (!SUPPORTED_EVENT_CLASSES.contains(event.getClass())) {
+            throw unsupportedEvent(event);
+        }
         AgentRunEntity run = requireRun(event.runId());
 
         if (event instanceof RunStartedEvent) {
@@ -121,6 +142,8 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
             run.setPhase(AgentRunPhase.AWAITING_TOOL);
             run.setCurrentIteration(event.iteration());
             run.setStopReason(AgentStopReason.WAITING_APPROVAL);
+        } else {
+            throw unsupportedEvent(event);
         }
 
         runRepository.saveAndFlush(run);
@@ -319,6 +342,17 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
     private AgentRunEntity requireRun(String runId) {
         return runRepository.findByRunId(runId).orElseThrow(() ->
                 new IllegalStateException("Durable AgentRun not found: " + runId)
+        );
+    }
+
+    static Set<Class<?>> supportedEventClasses() {
+        return SUPPORTED_EVENT_CLASSES;
+    }
+
+    private static IllegalArgumentException unsupportedEvent(AgentEvent event) {
+        return new IllegalArgumentException(
+                "Unsupported AgentEvent for persistence projection: "
+                        + event.getClass().getName()
         );
     }
 

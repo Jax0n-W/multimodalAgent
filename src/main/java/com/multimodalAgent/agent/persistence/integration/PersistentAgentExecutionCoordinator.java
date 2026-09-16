@@ -15,7 +15,7 @@ public final class PersistentAgentExecutionCoordinator {
     private final ExecutionHistoryStore store;
     private final ExecutionPersistenceFailureRegistry failures;
 
-    public PersistentAgentExecutionCoordinator(
+    PersistentAgentExecutionCoordinator(
             AgentExecutionCoordinator delegate,
             ExecutionHistoryStore store,
             ExecutionPersistenceFailureRegistry failures

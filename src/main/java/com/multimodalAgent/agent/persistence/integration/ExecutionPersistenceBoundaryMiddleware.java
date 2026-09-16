@@ -16,10 +16,17 @@ import java.util.Objects;
  */
 public final class ExecutionPersistenceBoundaryMiddleware implements RuntimeMiddleware {
 
+    public static final int ORDER = 200;
+
     private final ExecutionPersistenceFailureRegistry failures;
 
-    public ExecutionPersistenceBoundaryMiddleware(ExecutionPersistenceFailureRegistry failures) {
+    ExecutionPersistenceBoundaryMiddleware(ExecutionPersistenceFailureRegistry failures) {
         this.failures = Objects.requireNonNull(failures, "failures must not be null");
+    }
+
+    @Override
+    public int order() {
+        return ORDER;
     }
 
     @Override

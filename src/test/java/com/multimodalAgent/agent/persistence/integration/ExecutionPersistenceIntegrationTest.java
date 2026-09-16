@@ -31,6 +31,7 @@ import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjecto
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
+import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
 import com.multimodalAgent.agent.runtime.tool.ToolRisk;
@@ -80,6 +81,14 @@ class ExecutionPersistenceIntegrationTest {
 
     @Autowired
     private ToolExecutionRepository toolExecutionRepository;
+
+    @Test
+    void persistenceCoverageMustMatchTheCompleteSealedEventHierarchy() {
+        Set<Class<?>> permittedEventClasses = Set.of(AgentEvent.class.getPermittedSubclasses());
+
+        assertEquals(permittedEventClasses, JpaExecutionHistoryStore.supportedEventClasses());
+        assertEquals(AgentEventType.values().length, permittedEventClasses.size());
+    }
 
     @Test
     void shouldPersistDirectSuccess() {
@@ -209,6 +218,53 @@ class ExecutionPersistenceIntegrationTest {
     }
 
     @Test
+    void shouldPersistValidationFailureWithoutClaimingActualExecution() {
+        CountingTool tool = new CountingTool("validated_tool", false, false);
+        Harness harness = harness(
+                new ScriptedAgentModel(ModelTurn.toolCall(
+                        new ToolCall("call-invalid", tool.name(), Map.of("query", ""))
+                )),
+                List.of(tool),
+                new DefaultToolPolicyEngine()
+        );
+
+        AgentRunResult result = execute(
+                harness, "validation-failure", 3, Set.of(tool.name()), Set.of()
+        );
+
+        AgentStepEntity toolStep = steps("validation-failure").get(1);
+        ToolExecutionEntity execution = executions("validation-failure").get(0);
+        assertEquals(AgentStopReason.TOOL_ERROR, result.stopReason());
+        assertEquals(0, tool.executions());
+        assertEquals(AgentStepStatus.SKIPPED, toolStep.getStatus());
+        assertEquals(ToolExecutionStatus.BLOCKED, execution.getStatus());
+        assertEquals(ToolErrorCode.INVALID_ARGUMENTS.name(), execution.getErrorCode());
+        assertNull(execution.getStartedAt());
+    }
+
+    @Test
+    void shouldPersistUnknownToolWithoutClaimingActualExecution() {
+        String toolName = "unknown_tool";
+        Harness harness = harness(
+                new ScriptedAgentModel(ModelTurn.toolCall(call("call-unknown", toolName))),
+                List.of(),
+                new DefaultToolPolicyEngine()
+        );
+
+        AgentRunResult result = execute(
+                harness, "unknown-tool", 3, Set.of(toolName), Set.of()
+        );
+
+        AgentStepEntity toolStep = steps("unknown-tool").get(1);
+        ToolExecutionEntity execution = executions("unknown-tool").get(0);
+        assertEquals(AgentStopReason.TOOL_ERROR, result.stopReason());
+        assertEquals(AgentStepStatus.SKIPPED, toolStep.getStatus());
+        assertEquals(ToolExecutionStatus.BLOCKED, execution.getStatus());
+        assertEquals(ToolErrorCode.TOOL_NOT_FOUND.name(), execution.getErrorCode());
+        assertNull(execution.getStartedAt());
+    }
+
+    @Test
     void shouldPersistWaitingApprovalWithoutClaimingExecution() {
         CountingTool tool = new CountingTool("approval_tool", false, true);
         Harness harness = harness(
@@ -287,14 +343,12 @@ class ExecutionPersistenceIntegrationTest {
             List<? extends AgentTool<?, ?>> tools,
             ToolPolicyEngine policyEngine
     ) {
-        ExecutionPersistenceFailureRegistry failures =
-                new ExecutionPersistenceFailureRegistry();
-        ExecutionPersistenceEventPublisher persistencePublisher =
-                new ExecutionPersistenceEventPublisher(store, failures);
+        ExecutionPersistenceComposition composition =
+                new ExecutionPersistenceComposition(store);
         RecordingAgentEventPublisher recordingPublisher = new RecordingAgentEventPublisher();
         AgentEventPublisher publisher = event -> {
             recordingPublisher.publish(event);
-            persistencePublisher.publish(event);
+            composition.eventPublisher().publish(event);
         };
         ObjectMapper objectMapper = new ObjectMapper();
         ToolExecutor executor = new ToolExecutor(
@@ -307,7 +361,7 @@ class ExecutionPersistenceIntegrationTest {
                 objectMapper
         );
         RuntimeMiddlewareChain middleware = new RuntimeMiddlewareChain(List.of(
-                new ExecutionPersistenceBoundaryMiddleware(failures)
+                composition.boundaryMiddleware()
         ));
         AgentRunner runner = new AgentRunner(
                 model,
@@ -317,7 +371,7 @@ class ExecutionPersistenceIntegrationTest {
         );
         AgentExecutionCoordinator coordinator = new AgentExecutionCoordinator(runner, middleware);
         return new Harness(
-                new PersistentAgentExecutionCoordinator(coordinator, store, failures),
+                composition.persistentCoordinator(coordinator),
                 recordingPublisher
         );
     }

@@ -2,6 +2,7 @@ package com.multimodalAgent.agent.architecture;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
+import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.Test;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
@@ -9,8 +10,20 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 class RuntimeArchitectureTest {
 
     private static final String RUNTIME = "com.multimodalAgent.agent.runtime..";
-    private final JavaClasses classes = new ClassFileImporter()
+    private static final String COORDINATION = "com.multimodalAgent.agent.coordination..";
+    private static final String COORDINATION_DOMAIN = "com.multimodalAgent.agent.coordination";
+    private static final String COORDINATION_REDIS =
+            "com.multimodalAgent.agent.coordination.redis..";
+    private static final String COORDINATION_INTEGRATION =
+            "com.multimodalAgent.agent.coordination.integration..";
+    private static final String COORDINATION_WATCHDOG =
+            "com.multimodalAgent.agent.coordination.watchdog..";
+    private final JavaClasses runtimeClasses = new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("com.multimodalAgent.agent.runtime");
+    private final JavaClasses coordinationClasses = new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("com.multimodalAgent.agent.coordination");
 
     @Test
     void runtimeMustNotDependOnApplicationOrInfrastructurePackages() {
@@ -20,9 +33,10 @@ class RuntimeArchitectureTest {
                         "com.multimodalAgent.agent.service..",
                         "com.multimodalAgent.agent.repository..",
                         "com.multimodalAgent.agent.persistence..",
-                        "com.multimodalAgent.agent.adapter.."
+                        "com.multimodalAgent.agent.adapter..",
+                        COORDINATION
                 )
-                .check(classes);
+                .check(runtimeClasses);
     }
 
     @Test
@@ -32,7 +46,7 @@ class RuntimeArchitectureTest {
                         "jakarta.persistence..",
                         "org.hibernate.."
                 )
-                .check(classes);
+                .check(runtimeClasses);
     }
 
     @Test
@@ -41,8 +55,62 @@ class RuntimeArchitectureTest {
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "org.springframework.data..",
                         "org.springframework.ai..",
-                        "org.springframework.data.redis.."
+                        "org.springframework.data.redis..",
+                        "io.lettuce..",
+                        "redis.clients.jedis.."
                 )
-                .check(classes);
+                .check(runtimeClasses);
+    }
+
+    @Test
+    void coordinationContractsMustNotDependOnRedisClientTypes() {
+        noClasses().that().resideInAPackage(COORDINATION_DOMAIN)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "org.springframework.data.redis..",
+                        "io.lettuce..",
+                        "redis.clients.jedis.."
+                )
+                .check(coordinationClasses);
+    }
+
+    @Test
+    void coordinationDomainMustNotDependOnRedisAdapter() {
+        noClasses().that().resideInAPackage(COORDINATION_DOMAIN)
+                .should().dependOnClassesThat().resideInAPackage(COORDINATION_REDIS)
+                .check(coordinationClasses);
+    }
+
+    @Test
+    void coordinationIntegrationMustNotDependOnRedisClientOrAdapterTypes() {
+        noClasses().that().resideInAPackage(COORDINATION_INTEGRATION)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        COORDINATION_REDIS,
+                        "org.springframework.data.redis..",
+                        "io.lettuce..",
+                        "redis.clients.jedis.."
+                )
+                .check(coordinationClasses);
+    }
+
+    @Test
+    void redisAdapterMustNotDependOnCoordinationIntegrationOrPersistence() {
+        noClasses().that().resideInAPackage(COORDINATION_REDIS)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        COORDINATION_INTEGRATION,
+                        "com.multimodalAgent.agent.persistence.."
+                )
+                .check(coordinationClasses);
+    }
+
+    @Test
+    void watchdogMustNotDependOnRedisIntegrationPersistenceOrRuntimeCore() {
+        noClasses().that().resideInAPackage(COORDINATION_WATCHDOG)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        COORDINATION_REDIS,
+                        COORDINATION_INTEGRATION,
+                        "com.multimodalAgent.agent.persistence..",
+                        RUNTIME
+                )
+                .check(coordinationClasses);
     }
 }
