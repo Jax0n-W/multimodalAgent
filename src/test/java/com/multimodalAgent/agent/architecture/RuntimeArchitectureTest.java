@@ -10,6 +10,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 class RuntimeArchitectureTest {
 
     private static final String RUNTIME = "com.multimodalAgent.agent.runtime..";
+    private static final String STREAM = "com.multimodalAgent.agent.stream..";
     private static final String COORDINATION = "com.multimodalAgent.agent.coordination..";
     private static final String COORDINATION_DOMAIN = "com.multimodalAgent.agent.coordination";
     private static final String COORDINATION_REDIS =
@@ -24,6 +25,9 @@ class RuntimeArchitectureTest {
     private final JavaClasses coordinationClasses = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("com.multimodalAgent.agent.coordination");
+    private final JavaClasses streamClasses = new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("com.multimodalAgent.agent.stream");
 
     @Test
     void runtimeMustNotDependOnApplicationOrInfrastructurePackages() {
@@ -60,6 +64,33 @@ class RuntimeArchitectureTest {
                         "redis.clients.jedis.."
                 )
                 .check(runtimeClasses);
+    }
+
+    @Test
+    void runtimeMustNotDependOnLiveStreamingOrTransportTypes() {
+        noClasses().that().resideInAPackage(RUNTIME)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        STREAM,
+                        "org.springframework.web..",
+                        "org.springframework.http..",
+                        "reactor.."
+                )
+                .check(runtimeClasses);
+    }
+
+    @Test
+    void liveStreamContractMustRemainTransportAndInfrastructureNeutral() {
+        noClasses().that().resideInAPackage(STREAM)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "com.multimodalAgent.agent.controller..",
+                        "com.multimodalAgent.agent.persistence..",
+                        COORDINATION,
+                        "org.springframework..",
+                        "reactor..",
+                        "io.lettuce..",
+                        "redis.clients.jedis.."
+                )
+                .check(streamClasses);
     }
 
     @Test
