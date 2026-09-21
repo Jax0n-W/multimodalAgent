@@ -65,6 +65,8 @@ management:
         include: health,info
 
 multimodal-agent:
+  runtime:
+    enabled: ${AGENT_RUNTIME_ENABLED:false}
   coordination:
     redis:
       enabled: ${REDIS_COORDINATION_ENABLED:false}

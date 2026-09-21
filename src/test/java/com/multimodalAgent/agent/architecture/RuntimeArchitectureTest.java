@@ -11,6 +11,8 @@ class RuntimeArchitectureTest {
 
     private static final String RUNTIME = "com.multimodalAgent.agent.runtime..";
     private static final String STREAM = "com.multimodalAgent.agent.stream..";
+    private static final String STREAMING_INFRASTRUCTURE =
+            "com.multimodalAgent.agent.streaming..";
     private static final String COORDINATION = "com.multimodalAgent.agent.coordination..";
     private static final String COORDINATION_DOMAIN = "com.multimodalAgent.agent.coordination";
     private static final String COORDINATION_REDIS =
@@ -71,6 +73,7 @@ class RuntimeArchitectureTest {
         noClasses().that().resideInAPackage(RUNTIME)
                 .should().dependOnClassesThat().resideInAnyPackage(
                         STREAM,
+                        STREAMING_INFRASTRUCTURE,
                         "org.springframework.web..",
                         "org.springframework.http..",
                         "reactor.."
