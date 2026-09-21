@@ -2,9 +2,11 @@ package com.multimodalAgent.agent.streaming;
 
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingClient;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiStreamEvent;
+import com.multimodalAgent.agent.domain.UserAccount;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceException;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
+import com.multimodalAgent.agent.repository.UserAccountRepository;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
@@ -22,6 +24,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.web.reactive.server.FluxExchangeResult;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -68,6 +72,12 @@ class ProductionStreamingAgentExecutionTest {
     private AgentRunRepository runs;
 
     @Autowired
+    private UserAccountRepository users;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @Autowired
     private WebTestClient webClient;
 
     @MockBean
@@ -98,6 +108,80 @@ class ProductionStreamingAgentExecutionTest {
 
         assertTrue(runs.findByRunId(runId).isPresent());
         assertFalse(hub.isOpen(runId));
+    }
+
+    @Test
+    void sseRequiresDurableOwnershipWithoutAffectingTheOwnerRun() throws Exception {
+        UserAccount owner = createUser("sse-owner-");
+        UserAccount other = createUser("sse-other-");
+        String runId = "prod-auth-" + UUID.randomUUID();
+        CountDownLatch providerEntered = new CountDownLatch(1);
+        CountDownLatch releaseProvider = new CountDownLatch(1);
+        when(provider.stream(any())).thenReturn(Flux.defer(() -> {
+            providerEntered.countDown();
+            try {
+                if (!releaseProvider.await(20, TimeUnit.SECONDS)) {
+                    throw new AssertionError("Provider was not released");
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(exception);
+            }
+            return Flux.just(
+                    textChunk("owner answer", OpenAiApi.ChatCompletionFinishReason.STOP),
+                    OpenAiStreamEvent.Done.INSTANCE
+            );
+        }));
+        CompletableFuture<AgentRunResult> running = CompletableFuture.supplyAsync(
+                () -> execution.execute(request(runId, owner.getId()))
+        );
+        try {
+            assertTrue(providerEntered.await(10, TimeUnit.SECONDS));
+            assertTrue(runs.existsByRunIdAndUserId(runId, owner.getId()));
+            assertFalse(runs.existsByRunIdAndUserId(runId, other.getId()));
+
+            CompletableFuture<FluxExchangeResult<String>> ownerResponse =
+                    CompletableFuture.supplyAsync(() -> webClient.get()
+                            .uri("/api/agent/runs/{runId}/stream", runId)
+                            .headers(headers -> headers.setBasicAuth(owner.getUsername(), "sse-password"))
+                            .exchange()
+                            .expectStatus().isOk()
+                            .returnResult(String.class));
+            awaitSubscribers(runId, 1);
+
+            webClient.get()
+                    .uri("/api/agent/runs/{runId}/stream", runId)
+                    .headers(headers -> headers.setBasicAuth(other.getUsername(), "sse-password"))
+                    .exchange()
+                    .expectStatus().isNotFound();
+            webClient.get()
+                    .uri("/api/agent/runs/{runId}/stream", "unknown-" + UUID.randomUUID())
+                    .headers(headers -> headers.setBasicAuth(owner.getUsername(), "sse-password"))
+                    .exchange()
+                    .expectStatus().isNotFound();
+
+            assertTrue(hub.isOpen(runId));
+            assertEquals(1, hub.subscriberCount(runId));
+            verify(hub, times(1)).subscribe(runId);
+
+            releaseProvider.countDown();
+            AgentRunResult result = running.get(20, TimeUnit.SECONDS);
+            assertEquals(AgentStopReason.COMPLETED, result.stopReason());
+            assertEquals("owner answer", result.finalContent());
+            assertFalse(hub.isOpen(runId));
+            List<String> ownerEvents = ownerResponse.get(10, TimeUnit.SECONDS)
+                    .getResponseBody().collectList().block(java.time.Duration.ofSeconds(10));
+            assertNotNull(ownerEvents);
+            assertTrue(ownerEvents.stream().anyMatch(event -> event.contains("owner answer")));
+
+            webClient.get()
+                    .uri("/api/agent/runs/{runId}/stream", runId)
+                    .headers(headers -> headers.setBasicAuth(owner.getUsername(), "sse-password"))
+                    .exchange()
+                    .expectStatus().isNotFound();
+        } finally {
+            releaseProvider.countDown();
+        }
     }
 
     @Test
@@ -237,6 +321,10 @@ class ProductionStreamingAgentExecutionTest {
     }
 
     private AgentExecutionRequest request(String runId) {
+        return request(runId, 2L);
+    }
+
+    private AgentExecutionRequest request(String runId, Long userId) {
         return new AgentExecutionRequest(
                 new AgentRunSpec(
                         runId,
@@ -247,8 +335,25 @@ class ProductionStreamingAgentExecutionTest {
                         Set.of()
                 ),
                 "request-" + runId,
-                2L
+                userId
         );
+    }
+
+    private UserAccount createUser(String prefix) {
+        UserAccount user = new UserAccount();
+        user.setUsername(prefix + UUID.randomUUID());
+        user.setDisplayName(user.getUsername());
+        user.setPassword(passwordEncoder.encode("sse-password"));
+        user.setRoles(Set.of("ROLE_USER"));
+        return users.save(user);
+    }
+
+    private void awaitSubscribers(String runId, int count) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (hub.subscriberCount(runId) != count && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertEquals(count, hub.subscriberCount(runId));
     }
 
     private List<ExecutionStreamEvent> take(
