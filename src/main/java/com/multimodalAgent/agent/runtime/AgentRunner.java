@@ -1,5 +1,8 @@
 package com.multimodalAgent.agent.runtime;
 
+import com.multimodalAgent.agent.runtime.control.ExecutionCancelledException;
+import com.multimodalAgent.agent.runtime.control.ExecutionCheckpoint;
+import com.multimodalAgent.agent.runtime.control.RuntimeCancellation;
 import com.multimodalAgent.agent.runtime.event.AgentEventEmitter;
 import com.multimodalAgent.agent.runtime.event.AgentEventPublisher;
 import com.multimodalAgent.agent.runtime.event.ModelCompletedEvent;
@@ -101,6 +104,12 @@ public final class AgentRunner {
         );
 
         for (int iteration = 1; iteration <= spec.maxIterations(); iteration++) {
+            if (RuntimeCancellation.requested(runtimeContext, ExecutionCheckpoint.BEFORE_MODEL)) {
+                return cancelled(
+                        runtimeContext, iteration - 1, iteration,
+                        toolsUsed, messages, totalUsage, eventEmitter
+                );
+            }
             int currentIteration = iteration;
             ModelInvocationState invocationState = new ModelInvocationState();
             ModelTurn turn;
@@ -123,6 +132,7 @@ public final class AgentRunner {
                         : totalUsage.plus(invocationState.completedTurn.tokenUsage());
                 int completedIterations = invocationState.started ? iteration : iteration - 1;
                 return stopForMiddlewareFailure(
+                        runtimeContext,
                         completedIterations,
                         toolsUsed,
                         messages,
@@ -132,6 +142,7 @@ public final class AgentRunner {
                         exception
                 );
             } catch (RuntimeException exception) {
+                RuntimeCancellation.sealCoreTerminal(runtimeContext);
                 AgentRunResult result = stopped(
                         AgentStopReason.MODEL_ERROR,
                         iteration,
@@ -154,7 +165,19 @@ public final class AgentRunner {
             }
 
             totalUsage = totalUsage.plus(turn.tokenUsage());
+            if (RuntimeCancellation.requested(runtimeContext, ExecutionCheckpoint.AFTER_MODEL)) {
+                return cancelled(
+                        runtimeContext, iteration, iteration,
+                        toolsUsed, messages, totalUsage, eventEmitter
+                );
+            }
             if (turn.finishReason() == ModelFinishReason.STOP) {
+                if (!RuntimeCancellation.trySealNormalCompletion(runtimeContext)) {
+                    return cancelled(
+                            runtimeContext, iteration, iteration,
+                            toolsUsed, messages, totalUsage, eventEmitter
+                    );
+                }
                 messages.add(AgentMessage.assistant(turn.content()));
                 AgentRunResult result = new AgentRunResult(
                         turn.content(),
@@ -195,6 +218,7 @@ public final class AgentRunner {
                     );
                 } catch (RuntimeMiddlewareFailureException exception) {
                     return stopForMiddlewareFailure(
+                            runtimeContext,
                             iteration,
                             toolsUsed,
                             messages,
@@ -203,8 +227,14 @@ public final class AgentRunner {
                             iteration,
                             exception
                     );
+                } catch (ExecutionCancelledException exception) {
+                    return cancelled(
+                            runtimeContext, iteration, iteration,
+                            toolsUsed, messages, totalUsage, eventEmitter
+                    );
                 }
                 if (result.policyBlocked()) {
+                    RuntimeCancellation.sealCoreTerminal(runtimeContext);
                     AgentRunResult runResult = stopped(
                             AgentStopReason.POLICY_BLOCKED,
                             iteration,
@@ -226,6 +256,7 @@ public final class AgentRunner {
                     return runResult;
                 }
                 if (result.approvalRequired()) {
+                    RuntimeCancellation.sealCoreTerminal(runtimeContext);
                     AgentRunResult runResult = stopped(
                             AgentStopReason.WAITING_APPROVAL,
                             iteration,
@@ -248,6 +279,7 @@ public final class AgentRunner {
                     if (errorCode != ToolErrorCode.TOOL_NOT_FOUND) {
                         toolsUsed.add(toolCall.name());
                     }
+                    RuntimeCancellation.sealCoreTerminal(runtimeContext);
                     AgentRunResult runResult = stopped(
                             AgentStopReason.TOOL_ERROR,
                             iteration,
@@ -269,9 +301,23 @@ public final class AgentRunner {
                     return runResult;
                 }
                 toolsUsed.add(toolCall.name());
+                if (RuntimeCancellation.requested(
+                        runtimeContext, ExecutionCheckpoint.AFTER_TOOL_EXECUTION
+                )) {
+                    return cancelled(
+                            runtimeContext, iteration, iteration,
+                            toolsUsed, messages, totalUsage, eventEmitter
+                    );
+                }
             }
         }
 
+        if (!RuntimeCancellation.trySealNormalCompletion(runtimeContext)) {
+            return cancelled(
+                    runtimeContext, spec.maxIterations(), spec.maxIterations(),
+                    toolsUsed, messages, totalUsage, eventEmitter
+            );
+        }
         AgentRunResult result = stopped(
                 AgentStopReason.MAX_ITERATIONS,
                 spec.maxIterations(),
@@ -354,6 +400,7 @@ public final class AgentRunner {
     }
 
     private AgentRunResult stopForMiddlewareFailure(
+            AgentRuntimeContext runtimeContext,
             int completedIterations,
             Set<String> toolsUsed,
             List<AgentMessage> messages,
@@ -362,6 +409,7 @@ public final class AgentRunner {
             int eventIteration,
             RuntimeMiddlewareFailureException exception
     ) {
+        RuntimeCancellation.sealCoreTerminal(runtimeContext);
         AgentRunResult result = stopped(
                 AgentStopReason.INTERNAL_ERROR,
                 completedIterations,
@@ -379,6 +427,33 @@ public final class AgentRunner {
                         AgentStopReason.INTERNAL_ERROR,
                         null
                 )
+        );
+        return result;
+    }
+
+    private AgentRunResult cancelled(
+            AgentRuntimeContext context,
+            int completedIterations,
+            int eventIteration,
+            Set<String> toolsUsed,
+            List<AgentMessage> messages,
+            TokenUsage tokenUsage,
+            AgentEventEmitter eventEmitter
+    ) {
+        RuntimeCancellation.sealCoreTerminal(context);
+        AgentRunResult result = stopped(
+                AgentStopReason.CANCELLED,
+                completedIterations,
+                toolsUsed,
+                messages,
+                tokenUsage,
+                null,
+                null,
+                "Execution cancelled"
+        );
+        eventEmitter.emit(
+                eventIteration,
+                metadata -> new RunStoppedEvent(metadata, AgentStopReason.CANCELLED, null)
         );
         return result;
     }

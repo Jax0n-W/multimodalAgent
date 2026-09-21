@@ -42,7 +42,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
 
-/** Opt-in production composition of P8.2, P8.3, P6, and optional P7. */
+/** Opt-in production composition of P8.2–P8.4, P6, and optional P7. */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
         prefix = "multimodal-agent.runtime",
@@ -113,6 +113,7 @@ public class StreamingAgentExecutionConfiguration {
             ExecutionPersistenceComposition persistence,
             ExecutionStreamHub hub,
             ExecutionStreamPublisher publisher,
+            LocalExecutionControlRegistry controls,
             ObjectProvider<RunLeaseStore> leaseStoreProvider,
             ObjectProvider<RunLeaseWatchdogFactory> watchdogFactoryProvider
     ) {
@@ -159,6 +160,6 @@ public class StreamingAgentExecutionConfiguration {
                         watchdogFactory,
                         persistent
                 )::execute;
-        return new StreamingAgentExecutionService(execution, hub, publisher);
+        return new StreamingAgentExecutionService(execution, hub, publisher, controls);
     }
 }

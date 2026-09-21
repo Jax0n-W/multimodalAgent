@@ -2,7 +2,7 @@ package com.multimodalAgent.agent.runtime.control;
 
 /**
  * Safe cooperative boundaries at which future Runtime work may observe cancellation intent.
- * P8.1 defines these values but does not connect them to the frozen Runtime Core.
+ * P8.4 observes these values at the Model and Tool execution boundaries.
  */
 public enum ExecutionCheckpoint {
     BEFORE_MODEL,

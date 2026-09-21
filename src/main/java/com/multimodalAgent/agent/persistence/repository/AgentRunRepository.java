@@ -12,6 +12,8 @@ public interface AgentRunRepository extends JpaRepository<AgentRunEntity, Long> 
 
     boolean existsByRunIdAndUserId(String runId, Long userId);
 
+    Optional<AgentRunEntity> findByRunIdAndUserId(String runId, Long userId);
+
     Optional<AgentRunEntity> findByRequestId(String requestId);
 
     List<AgentRunEntity> findBySessionIdOrderByCreatedAtDesc(String sessionId);

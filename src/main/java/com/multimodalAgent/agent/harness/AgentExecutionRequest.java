@@ -76,6 +76,17 @@ public record AgentExecutionRequest(
         );
     }
 
+    public AgentExecutionRequest withCancellationContext(CancellationContext context) {
+        return new AgentExecutionRequest(
+                runSpec,
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                Objects.requireNonNull(context, "context must not be null"),
+                runtimeContextContributors
+        );
+    }
+
     private static void requireOptionalText(String value, String field) {
         if (value != null && value.isBlank()) {
             throw new IllegalArgumentException(field + " must not be blank when present");

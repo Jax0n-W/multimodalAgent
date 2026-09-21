@@ -10,6 +10,9 @@ import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolSucceededEvent;
 import com.multimodalAgent.agent.runtime.event.ToolValidatedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolValidationFailedEvent;
+import com.multimodalAgent.agent.runtime.control.ExecutionCancelledException;
+import com.multimodalAgent.agent.runtime.control.ExecutionCheckpoint;
+import com.multimodalAgent.agent.runtime.control.RuntimeCancellation;
 import com.multimodalAgent.agent.runtime.extension.AgentRuntimeContext;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareFailureException;
@@ -127,6 +130,8 @@ public final class ToolExecutor {
             return ToolResult.failure(ToolErrorCode.INVALID_ARGUMENTS, exception.getMessage());
         } catch (RuntimeMiddlewareFailureException exception) {
             throw exception;
+        } catch (ExecutionCancelledException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
             emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.EXECUTION_FAILED);
             return ToolResult.failure(
@@ -195,7 +200,8 @@ public final class ToolExecutor {
                         toolCall,
                         evaluatedDecision,
                         eventEmitter,
-                        iteration
+                        iteration,
+                        runtimeContext
                 )
         );
     }
@@ -206,8 +212,15 @@ public final class ToolExecutor {
             ToolCall toolCall,
             ToolPolicyDecision decision,
             AgentEventEmitter eventEmitter,
-            int iteration
+            int iteration,
+            AgentRuntimeContext runtimeContext
     ) {
+        if (RuntimeCancellation.requested(
+                runtimeContext,
+                ExecutionCheckpoint.BEFORE_TOOL_EXECUTION
+        )) {
+            throw new ExecutionCancelledException();
+        }
         eventEmitter.emit(
                 iteration,
                 metadata -> new ToolStartedEvent(
