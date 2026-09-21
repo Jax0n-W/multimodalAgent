@@ -1,82 +1,54 @@
-# ADR-002: Runtime Extension Kernel Semantic Boundaries
+# ADR-002：Runtime 扩展内核的语义边界
 
-- Status: Accepted
-- Date: 2026-09-13
+- 状态：已接受
+- 日期：2026-09-13
 
-## Context
+## 背景
 
-Phase 5 adds a reusable extension seam around Agent runs, model calls, and allowed tool execution.
-The seam must support observability without becoming a second runtime, weakening tool governance,
-or rewriting core facts after they occur.
+Phase 5 在 Agent Run、模型调用和已获准的工具执行周围加入可复用扩展边界。它支持可观测性，但不能演变成第二套 Runtime、削弱工具治理，或改写已经发生的 Core 事实。
 
-## Decisions
+## 决策
 
-### 1. Middleware is a transparent extension
+### 1. Middleware 是透明扩展
 
-`RuntimeMiddleware` must call `next.proceed()` exactly once and return the same downstream object
-instance. It cannot short-circuit, replace results, or change Agent core semantics. Metrics, tracing,
-logging, latency/token observation, and context enrichment fit this boundary.
+`RuntimeMiddleware` 必须恰好调用一次 `next.proceed()`，并原样返回下游的同一个结果对象实例。它不能短路执行、替换结果或改变 Agent Core 语义。指标、追踪、日志、延迟与 Token 观测，以及上下文补充，属于这一边界。
 
-The `next` capability is synchronous and valid only within the dynamic scope and thread of the
-corresponding middleware invocation. The extension kernel closes it whenever the middleware returns,
-validation fails, or an exception leaves the invocation. A retained or cross-thread `next` cannot
-start downstream work after that boundary.
+`next` 是同步能力，只在对应 Middleware 调用的动态作用域和当前线程内有效。Middleware 返回、验证失败或异常离开调用时，扩展内核都会关闭它。被保存或跨线程传递的 `next` 不能在边界关闭后再启动下游工作。
 
-Request idempotency, session-lock rejection, admission control, rate-limit rejection, cancellation
-prechecks, and cached-result returns require a future Execution Guard / Preflight boundary. They do
-not belong in transparent middleware.
+请求幂等、Session Lock 拒绝、准入控制、限流拒绝、取消预检和缓存结果返回，需要未来独立的 Execution Guard / Preflight 边界，不属于透明 Middleware。
 
-### 2. Core outcome and harness outcome are distinct
+### 2. Core 结果与 Harness 结果不同
 
-Agent events describe the Agent Runtime Core lifecycle, not every application or harness
-post-processing failure. Once `RUN_COMPLETED` is emitted, an `aroundRun` post-phase failure is a
-harness/extension failure. It is propagated to the caller without emitting `RUN_STOPPED`, changing
-the completed core outcome, or creating a second terminal event.
+Agent Event 描述 Agent Runtime Core 的生命周期，而不是应用层或 Harness 的每一次后处理失败。一旦发出 `RUN_COMPLETED`，`aroundRun` 后置阶段的失败就是 Harness / 扩展层失败。它应传播给调用方，但不得再发出 `RUN_STOPPED`、改写已完成的 Core 结果，或制造第二个终态事件。
 
-### 3. Failure classification is origin-based
+### 3. 按失败来源分类
 
-`RuntimeMiddlewareFailureException` marks failures positively identified by the extension kernel as
-middleware-originated. A downstream model or tool exception is rethrown unchanged by the middleware
-chain. Consequently, a model or tool that happens to throw `RuntimeMiddlewareException` is still
-classified as `MODEL_ERROR` or `TOOL_ERROR`; exception-name collision does not turn it into
-`INTERNAL_ERROR`.
+`RuntimeMiddlewareFailureException` 标识扩展内核明确判定为 Middleware 来源的失败。Middleware 链会原样重新抛出下游模型或工具异常。因此，即使模型或工具抛出的异常类名恰好是 `RuntimeMiddlewareException`，仍分别归类为 `MODEL_ERROR` 或 `TOOL_ERROR`；异常名称碰撞不会把它变为 `INTERNAL_ERROR`。
 
-### 4. Tool governance precedes middleware
+### 4. 工具治理先于 Middleware
 
-Tool middleware is entered only after resolve, deserialize, validation, policy evaluation, and an
-`ALLOW` decision. Unknown tools, invalid arguments, `DENY`, and `REQUIRE_APPROVAL` never enter the
-tool middleware chain. Middleware is not a safety bypass.
+只有在工具查找、反序列化、参数验证、Policy 评估完成且决策为 `ALLOW` 后，才会进入工具 Middleware。未知工具、非法参数、`DENY` 与 `REQUIRE_APPROVAL` 都不能进入工具 Middleware 链。Middleware 不是绕过安全控制的通道。
 
-### 5. External side-effect truth outranks later failures
+### 5. 外部副作用事实优先于后续失败
 
-Once `TOOL_SUCCEEDED` is emitted, later middleware or harness failure cannot reinterpret the tool as
-failed. The Decision Trace may therefore truthfully contain a succeeded tool and a run stopped with
-`INTERNAL_ERROR`.
+一旦发出 `TOOL_SUCCEEDED`，后续 Middleware 或 Harness 失败都不能把该工具重新解释为失败。因此，Decision Trace 可以如实同时包含“工具成功”和“Run 因 `INTERNAL_ERROR` 停止”。
 
-Three future persistence facts must remain distinct:
+未来持久化必须区分三类事实：
 
-- Tool Invocation Truth: whether an external side effect occurred.
-- Tool Result Processing Truth: whether its result was serialized and processed.
-- Run Truth: whether the overall Agent run completed.
+- 工具调用事实（Tool Invocation Truth）：外部副作用是否发生。
+- 工具结果处理事实（Tool Result Processing Truth）：结果是否完成序列化和处理。
+- Run 事实（Run Truth）：整个 Agent Run 是否完成。
 
-The current synchronous executor calls the external tool before serializing its result. A
-non-idempotent side effect may therefore succeed while serialization fails. Future persistence
-integration must represent ambiguous processing as durable `UNKNOWN` semantics and must never blind
-retry a non-idempotent operation. Phase 5 deliberately does not implement durable tool execution,
-recovery, retry, outbox, or checkpoint behavior.
+当前同步执行器先调用外部工具，再序列化结果。因此，非幂等副作用可能已经成功，而序列化随后失败。未来的持久化集成必须以持久化的 `UNKNOWN` 语义表达这种不确定性，绝不能盲目重试非幂等操作。Phase 5 明确不实现持久化工具执行、恢复、重试、Outbox 或 Checkpoint。
 
-### 6. Cancellation is propagation only
+### 6. 取消只做上下文传递
 
-`CancellationContext` is a context-propagation seam. Phase 5 defines no interruption, cancellation
-event, Redis flag, thread cancellation, or tool cancellation semantics.
+`CancellationContext` 是上下文传递的扩展点。Phase 5 不定义线程中断、取消事件、Redis 标记、线程取消或工具取消语义。
 
-## Consequences
+## 后果
 
-- `AgentRunner` remains the sole owner of the Model-to-Tool reasoning loop.
-- `ToolExecutor` remains the owner of tool contract validation and policy enforcement.
-- `AgentExecutionCoordinator` creates one run context and applies `aroundRun`; it does not duplicate
-  model, policy, tool, event, persistence, or recovery logic.
-- Middleware instances and chains may be shared across runs; per-run mutable state belongs in
-  `AgentRuntimeContext.attributes()`.
-- Production `requestId` enforcement is deferred until the idempotency guard is integrated; minimal
-  and test executions may omit it.
+- `AgentRunner` 仍是 Model-to-Tool 推理循环的唯一负责人。
+- `ToolExecutor` 仍负责工具契约验证与 Policy 执行。
+- `AgentExecutionCoordinator` 创建单个 Run Context 并应用 `aroundRun`；它不重复模型、Policy、工具、事件、持久化或恢复逻辑。
+- Middleware 实例及其链可以跨 Run 共享；每次 Run 的可变状态应放在 `AgentRuntimeContext.attributes()`。
+- 生产环境的 `requestId` 强制校验留待幂等 Guard 接入；最小运行和测试可以不提供它。

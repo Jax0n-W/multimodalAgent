@@ -1,146 +1,109 @@
-# ADR-004: Real Model Vertical Slice
+# ADR-004：真实模型纵向闭环
 
-- Status: Accepted; runtime end-to-end verified
-- Date: 2026-09-13
+- 状态：已接受；已通过 Runtime 端到端验证
+- 日期：2026-09-13
 
-## Context
+## 背景
 
-P5V connects the local fine-tuned `mindbridge-qwen2.5-7b-ft` model to the frozen Java Agent
-Runtime through Spring AI and Ollama. The model is a Qwen2.5-7B GGUF quantized as Q4_K_M and
-registered in Ollama as `mindbridge-qwen2.5-7b-ft:latest`.
+P5V 通过 Spring AI 和 Ollama，将本地微调模型 `mindbridge-qwen2.5-7b-ft` 接入已冻结的 Java Agent Runtime。该模型是 Q4_K_M 量化的 Qwen2.5-7B GGUF，在 Ollama 中注册为 `mindbridge-qwen2.5-7b-ft:latest`。
 
-The phase must prove the non-streaming path from `AgentExecutionCoordinator`, through a real model
-ToolCall and governed Java Tool execution, back to a final model answer. It does not migrate the
-production ChatService or add platform capabilities.
+本阶段必须证明非流式链路：从 `AgentExecutionCoordinator` 出发，经过真实模型产生 ToolCall、受治理的 Java 工具执行，再回到模型的最终回答。本阶段不迁移生产 `ChatService`，也不增加平台能力。
 
-## Decisions
+## 决策
 
-### 1. Runtime remains provider-agnostic
+### 1. Runtime 不依赖模型提供方
 
-Runtime contracts contain no Spring AI, Ollama, or OpenAI types. `AgentModelRequest` carries
-immutable runtime messages and provider-neutral `ModelToolDefinition` values.
+Runtime 契约不包含 Spring AI、Ollama 或 OpenAI 类型。`AgentModelRequest` 携带不可变 Runtime 消息和与提供方无关的 `ModelToolDefinition`。
 
-### 2. The adapter is the provider integration boundary
+### 2. Adapter 是模型提供方集成边界
 
-`SpringAiOllamaAgentModelAdapter` owns Spring AI request/response mapping, finish-reason handling,
-JSON argument syntax parsing, and usage extraction. The optional
-`SpringAiOpenAiAgentModelAdapter` shares the same protocol mapping without changing Runtime.
+`SpringAiOllamaAgentModelAdapter` 负责 Spring AI 请求/响应映射、结束原因处理、JSON 参数语法解析和 Token Usage 提取。可选的 `SpringAiOpenAiAgentModelAdapter` 复用相同的协议映射，不改变 Runtime。
 
-### 3. Ollama is reached through its local OpenAI-compatible endpoint
+### 3. 通过本地 Ollama 的 OpenAI 兼容接口通信
 
-The actual provider remains local Ollama at `http://127.0.0.1:11434`, and the actual model is
-`mindbridge-qwen2.5-7b-ft`. The adapter supplies a Spring AI `OpenAiChatModel` configured with this
-local base URL; no OpenAI service or credential is used.
+实际提供方仍是 `http://127.0.0.1:11434` 的本地 Ollama，实际模型仍是 `mindbridge-qwen2.5-7b-ft`。Adapter 使用配置为该本地地址的 Spring AI `OpenAiChatModel`；不调用 OpenAI 服务，也不使用 OpenAI 凭证。
 
-This transport choice is required because Spring AI 1.0.0's native `OllamaChatModel` maps native
-Ollama ToolCalls to Spring AI ToolCalls with an empty ID. A nonblank provider ToolCall ID is a
-frozen Runtime invariant used by approval, event correlation, run-wide uniqueness, and second-call
-ToolResult correlation. Ollama's OpenAI-compatible endpoint preserves that provider ID. Spring AI
-is not upgraded in P5V.
+选择这一传输方式的原因是：Spring AI 1.0.0 的原生 `OllamaChatModel` 将 Ollama 原生 ToolCall 映射为 Spring AI ToolCall 时，会得到空 ID。非空的提供方 ToolCall ID 是已冻结的 Runtime 不变量，用于审批、事件关联、整个 Run 内的唯一性以及第二次模型调用时的 ToolResult 关联。Ollama 的 OpenAI 兼容接口保留该 ID。P5V 不升级 Spring AI。
 
-### 4. Spring AI never executes Tools
+### 4. Spring AI 不执行工具
 
-Spring AI receives definition-only `ToolCallback` values with internal Tool execution explicitly
-disabled. A callback throws if invoked, so accidental framework-side execution fails closed.
+Spring AI 仅接收定义用途的 `ToolCallback`，其内部工具执行被显式禁用。若回调意外被调用，会直接抛出异常，按封闭原则失败。
 
-### 5. ToolExecutor remains the only Tool execution path
+### 5. `ToolExecutor` 是唯一工具执行路径
 
-Provider ToolCalls return as runtime `ToolCall` values. The existing path remains:
+提供方的 ToolCall 被映射为 Runtime `ToolCall`，继续走既有链路：
 
 ```text
 ToolRegistry -> Deserialize -> Validation -> Policy -> RuntimeMiddleware -> Tool.execute
 ```
 
-### 6. Only current-run allowedTools are exposed
+### 6. 只向模型暴露当前 Run 的 `allowedTools`
 
-`AgentRunner` intersects registered descriptors with `AgentRunSpec.allowedTools` before each model
-invocation. This least-privilege projection supplements, but never replaces, ToolExecutor policy
-enforcement.
+每次调用模型前，`AgentRunner` 都会取已注册工具描述与 `AgentRunSpec.allowedTools` 的交集。这是最小权限投影，但不能替代 `ToolExecutor` 的 Policy 校验。
 
-### 7. Provider ToolCall identity and order are preserved
+### 7. 保留提供方 ToolCall 身份及顺序
 
-The provider ToolCall ID, Tool name, and call order are copied unchanged into Runtime. Missing IDs,
-unsupported call types, and malformed protocol data fail at the model boundary. Existing run-wide
-ToolCall ID uniqueness remains enforced by AgentRunner.
+提供方 ToolCall ID、工具名和调用顺序原样复制到 Runtime。缺失 ID、不支持的调用类型或畸形协议数据在模型边界失败。`AgentRunner` 继续保证 ToolCall ID 在整个 Run 中唯一。
 
-### 8. Syntax parsing and semantic validation remain separate
+### 8. 语法解析与语义验证分离
 
-The adapter parses provider argument JSON into `Map<String, Object>`. It does not apply Bean
-Validation or business rules. Strong typing, Jakarta Validation, and policy remain in ToolExecutor.
+Adapter 仅把提供方参数 JSON 解析为 `Map<String, Object>`，不执行 Bean Validation 或业务规则。强类型映射、Jakarta Validation 和 Policy 仍由 `ToolExecutor` 负责。
 
-### 9. Provider usage maps to TokenUsage
+### 9. Token Usage 映射
 
-Prompt and completion token counts map to Runtime input and output tokens. Missing provider usage
-uses the explicit `TokenUsage.ZERO` fallback. Budget and quota enforcement remain deferred.
+提供方的 Prompt 与 Completion Token 数量分别映射为 Runtime 输入与输出 Token。没有 Usage 时明确回退为 `TokenUsage.ZERO`。预算和配额执行留待后续阶段。
 
-### 10. Unsupported provider outcomes are model failures
+### 10. 不支持的提供方结果视为模型失败
 
-Only `STOP` without ToolCalls and `TOOL_CALLS` with ToolCalls are accepted. Transport errors,
-missing or malformed responses, unsupported call types, malformed arguments, and unsupported
-finish reasons throw from the adapter. AgentRunner converts these to `MODEL_FAILED` followed by
-`RUN_STOPPED(MODEL_ERROR)`.
+只接受无 ToolCall 的 `STOP` 与有 ToolCall 的 `TOOL_CALLS`。传输错误、缺失或畸形响应、不支持的调用类型、畸形参数和不支持的结束原因都会从 Adapter 抛出。`AgentRunner` 将其转化为 `MODEL_FAILED`，随后发出 `RUN_STOPPED(MODEL_ERROR)`。
 
-### 11. Real-model tests are opt-in
+### 11. 真实模型测试需要显式启用
 
-Tests tagged `real-model` are excluded from default Maven execution and enabled only with the
-`real-model` profile. They first inspect Ollama `/api/tags` and skip with an explicit reason when
-the endpoint or model is unavailable. Tests never start, stop, or reconfigure Ollama.
+标记为 `real-model` 的测试默认不由 Maven 执行，仅在 `real-model` profile 中启用。测试先查询 Ollama `/api/tags`；端点或模型不可用时，会明确说明原因并跳过。测试绝不启动、停止或重新配置 Ollama。
 
-Defaults:
+默认值：
 
 ```text
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=mindbridge-qwen2.5-7b-ft
 ```
 
-No external API key is required.
+无需外部 API Key。
 
-### 12. Verification starts at AgentExecutionCoordinator
+### 12. 从 `AgentExecutionCoordinator` 验证
 
-Both real smoke cases enter through `AgentExecutionCoordinator`, not directly through the adapter:
+两条真实 Smoke Test 均从 `AgentExecutionCoordinator` 进入，而非直接调用 Adapter：
 
-1. Direct answer: one real model invocation, `STOP`, nonblank answer, `RUN_COMPLETED`, no Tool.
-2. Tool round trip: real ToolCall, one deterministic `knowledge_search` execution through
-   ToolExecutor, ToolResult correlation by the provider ID, second real model invocation, `STOP`,
-   nonblank answer, and final `RUN_COMPLETED`.
+1. 直接回答：一次真实模型调用、`STOP`、非空回答、`RUN_COMPLETED`，没有工具执行。
+2. 工具往返：真实 ToolCall，经 `ToolExecutor` 确定性执行一次 `knowledge_search`，通过提供方 ID 关联 ToolResult，第二次真实模型调用后得到 `STOP`、非空回答和最终 `RUN_COMPLETED`。
 
-The second test records model requests and turns so it can prove that the second invocation
-contains both the assistant ToolCall and its matching ToolResult.
+第二条测试会记录模型请求和模型轮次，以证明第二次调用同时包含 Assistant ToolCall 及匹配的 ToolResult。
 
-### 13. P5V is non-streaming
+### 13. P5V 不采用流式调用
 
-The adapter uses one synchronous Spring AI `ChatModel.call` per Runtime model iteration. Streaming
-and partial ToolCall protocols remain deferred.
+每个 Runtime 模型轮次通过 Spring AI `ChatModel.call` 进行一次同步调用。流式与部分 ToolCall 协议留待后续。
 
-### 14. P5V does not integrate persistence or production ChatService
+### 14. P5V 不集成持久化或生产 `ChatService`
 
-No AgentRun, AgentStep, ToolExecution, checkpoint, or recovery persistence is connected in this
-phase. The existing ChatService, controllers, SSE flow, memory, RAG, and legacy `AiClient` remain
-unchanged.
+本阶段没有连接 AgentRun、AgentStep、ToolExecution、Checkpoint 或恢复持久化。现有 `ChatService`、Controller、SSE 流程、记忆、RAG 和旧 `AiClient` 都不变。
 
-## Consequences
+## 后果
 
-- The local fine-tuned Ollama model can propose Tools without bypassing Runtime governance.
-- The provider ToolCall ID survives the full model-to-runtime-to-model round trip.
-- Tool schemas are generated from Java input types at the adapter boundary.
-- Default CI remains deterministic and performs no real model network calls.
-- Successful deterministic adapter tests do not by themselves prove the real vertical slice;
-  P5V freezes only after both coordinator-level real smoke tests pass.
+- 本地微调 Ollama 模型能够提出工具调用，但不能绕过 Runtime 治理。
+- 提供方 ToolCall ID 在“模型 → Runtime → 模型”的全链路中保留。
+- 工具 Schema 在 Adapter 边界从 Java 输入类型生成。
+- 默认 CI 保持确定性，不调用真实模型网络。
+- 确定性 Adapter 测试通过本身不足以证明真实纵向闭环；两条 Coordinator 级真实 Smoke Test 通过后，P5V 才冻结。
 
-## Verification
+## 验证记录
 
-On 2026-09-13, `mvn -Preal-model -Dtest=RealModelAgentSmokeTest test` ran against the local
-Ollama model and passed both tests without skips:
+2026-09-13，`mvn -Preal-model -Dtest=RealModelAgentSmokeTest test` 针对本地 Ollama 模型运行，两条测试均通过且没有跳过：
 
-- Direct answer: one model invocation, `STOP`, nonblank answer, final `RUN_COMPLETED`, no Tool.
-- Tool round trip: first turn `TOOL_CALLS`, one `knowledge_search` execution through ToolExecutor,
-  provider ID preserved into the assistant ToolCall and ToolResult, second turn `STOP`, nonblank
-  answer, final `RUN_COMPLETED`.
+- 直接回答：一次模型调用、`STOP`、非空回答、最终 `RUN_COMPLETED`，无工具。
+- 工具往返：首轮为 `TOOL_CALLS`，`ToolExecutor` 执行一次 `knowledge_search`；提供方 ID 保留在 Assistant ToolCall 与 ToolResult 中；次轮为 `STOP`、非空回答、最终 `RUN_COMPLETED`。
 
-The local model's native Tool Calling and ToolResult follow-up behavior had also been verified
-independently before the Runtime end-to-end test. The coordinator test is the P5V freeze evidence.
+Runtime 端到端测试之前，已经独立验证本地模型原生 Tool Calling 和 ToolResult 后续处理行为。Coordinator 测试是 P5V 的冻结证据。
 
-## Deferred
+## 暂缓事项
 
-P6 persistence integration, P7 Redis coordination, P8 streaming, P9 gateway/budget, P10 recovery,
-P11 memory, P12 RAG, and P13 production hardening remain out of scope.
+P6 持久化集成、P7 Redis 协调、P8 流式、P9 Gateway / Budget、P10 恢复、P11 记忆、P12 RAG 和 P13 生产加固均不在本阶段范围内。

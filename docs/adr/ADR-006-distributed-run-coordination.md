@@ -1,81 +1,64 @@
-# ADR-006: Distributed Run Coordination
+# ADR-006：分布式 Run 协调
 
-- Status: Accepted and semantically hardened through P7H
-- Date: 2026-09-16
+- 状态：已接受，并已通过 P7H 完成语义加固
+- 日期：2026-09-16
 
-## Context and scope
+## 背景与范围
 
-P6 made execution history durable, but database persistence alone does not prevent two application
-instances from concurrently attempting the same `runId`. P7 introduces distributed coordination
-without turning Redis into another runtime state machine.
+P6 让执行历史可持久化，但仅靠数据库持久化不能阻止两个应用实例并发尝试执行同一 `runId`。P7 引入分布式协调，但不把 Redis 变成第二套 Runtime 状态机。
 
-P7.1 freezes only the coordination semantics, domain port, failure vocabulary, lease-session state
-model, configuration contract, and architecture constraints. It does not connect to Redis and does
-not execute a coordinated run.
+P7.1 仅冻结协调语义、领域端口、失败分类、租约 Session 状态模型、配置契约与架构约束；它不连接 Redis，也不运行受协调的 Run。
 
-## Decision
+## 决策
 
-### Authority boundaries
+### 权威边界
 
-The three state authorities remain deliberately separate:
+三个状态权威刻意分离：
 
-- Runtime Core is the authority for execution truth: model, tool, iteration, and terminal facts.
-- MySQL is the authority for successfully persisted durable execution history and durable run
-  identity.
-- Redis will be ephemeral coordination state for active execution ownership only.
+- Runtime Core 负责执行事实：模型、工具、轮次和终态。
+- MySQL 负责成功持久化的执行历史及 Run 身份。
+- Redis 只保存活跃执行所有权的临时协调状态。
 
-Redis must not contain or decide iteration state, model state, tool state, run terminal state,
-conversation history, checkpoints, recovery state, or durable history. Runtime Core must not depend
-on Redis, Spring Data Redis, a coordination adapter implementation, or persistence implementation.
+Redis 不得保存或决定轮次、模型、工具、Run 终态、对话历史、Checkpoint、恢复状态或持久历史。Runtime Core 不得依赖 Redis、Spring Data Redis、协调 Adapter 实现或持久化实现。
 
-### Coordination scope and ownership
+### 协调范围与所有权
 
-Coordination is scoped to `runId`, not `sessionId`. P7 guarantees at most one active lease owner for
-a run ID; it does not serialize all runs in a conversation session.
+协调以 `runId` 为范围，而非 `sessionId`。P7 保证一个 Run ID 最多只有一个活跃租约持有者，但不串行化同一会话中的所有 Run。
 
-Lease contention is rejection, not waiting. A second caller for an already active `runId` must fail
-with `RunAlreadyActiveException`; it must not wait for the first owner and then execute the same run
-again.
+租约竞争应直接拒绝，而非等待。第二个调用方遇到活跃的 `runId` 时，必须收到 `RunAlreadyActiveException`，不能等待首个持有者结束后再次执行同一 Run。
 
-Lease acquisition must occur before P6 durable admission. The intended full-P7 composition is:
+完整 P7 的预期组合顺序：
 
 ```text
 AgentExecutionRequest
   -> CoordinatedAgentExecutionCoordinator
-  -> acquire run lease
+  -> 获取 Run 租约
   -> PersistentAgentExecutionCoordinator
-  -> durable admission
+  -> 持久化准入
   -> AgentExecutionCoordinator
   -> Runtime
-  -> durable finalization
-  -> stop renewal
-  -> compare-and-delete lease
+  -> 持久化收尾
+  -> 停止续租
+  -> 比较令牌后删除租约
 ```
 
-P7.1 documented this composition. P7.3 implemented its acquire/delegate/terminal-release shell.
-P7.4 adds automatic renewal and Runtime safe-boundary enforcement, while production activation
-remains deferred.
+P7.1 记录该组合；P7.3 实现获取/委托/终态释放的外壳；P7.4 增加自动续租和 Runtime 安全边界约束。生产入口的启用仍暂缓。
 
-### Redis and database guards are complementary
+### Redis 与数据库约束互补
 
-Redis protects concurrent active ownership. The database unique constraints continue to protect
-durable run identity. A successful Redis acquire does not prove that a run is safe to execute as a
-brand-new run: a durable row may already exist from an earlier execution whose ephemeral lease has
-expired or been released. Durable admission therefore remains mandatory after lease acquisition.
+Redis 保护并发活跃所有权；数据库唯一约束继续保护持久化 Run 身份。成功获取 Redis 租约不代表可以把 Run 当作全新 Run 执行：早先执行可能已有持久行，其临时租约却已经过期或释放。因此，获取租约后仍必须进行持久化准入。
 
-A `leaseToken` is an unguessable ownership credential used by future compare-and-renew and
-compare-and-delete operations. It is not a business identifier, is not a `runId`, and must never be
-replaced by a Redis key. The future default key schema is:
+`leaseToken` 是不可猜测的所有权凭证，用于“比较并续租”和“比较并删除”；它不是业务 ID、不是 `runId`，也不能用 Redis Key 代替。未来默认 Key Schema：
 
 ```text
 mma:coord:v1:run:{runId}:lease
 ```
 
-Key construction belongs to the future Redis adapter, not the domain contract.
+Key 的构造属于未来 Redis Adapter，而非领域契约。
 
-### Lease lifecycle and execution authority
+### 租约生命周期与执行权
 
-The frozen session states are `ACTIVE`, `LOST`, `CLOSING`, and `CLOSED`. Legal transitions are:
+已冻结的 Session 状态为 `ACTIVE`、`LOST`、`CLOSING`、`CLOSED`，合法转换：
 
 ```text
 ACTIVE -> LOST
@@ -84,30 +67,19 @@ LOST -> CLOSING
 CLOSING -> CLOSED
 ```
 
-`LOST -> ACTIVE`, `CLOSED -> ACTIVE`, and `CLOSED -> LOST` are forbidden. Ownership loss is
-monotonic: once ownership cannot be proven, later infrastructure recovery or a successful-looking
-renewal must not restore execution authority for that execution. A new execution must acquire a new
-lease and use a new session.
+禁止 `LOST -> ACTIVE`、`CLOSED -> ACTIVE` 和 `CLOSED -> LOST`。所有权丢失具有单调性：一旦无法证明所有权，后续基础设施恢复或看似成功的续租都不能恢复本次执行的权限。新执行必须获取新租约并使用新 Session。
 
-`EXPLICIT_LEASE_LOSS` means coordination explicitly proved the current token is no longer the
-owner, such as token mismatch or missing key. `COORDINATION_UNAVAILABLE` means infrastructure could
-not prove ownership because the outcome is unavailable or unknown. They are observably distinct,
-but both move the session from `ACTIVE` to `LOST` and prohibit future Core work.
+`EXPLICIT_LEASE_LOSS` 表示协调层已明确证明当前 Token 不再是持有者，例如 Token 不匹配或 Key 缺失。`COORDINATION_UNAVAILABLE` 表示基础设施不可用或结果未知，因而无法证明所有权。两者诊断上不同，但都会使 Session 从 `ACTIVE` 变为 `LOST`，并禁止后续 Core 工作。
 
-P7 provides cooperative execution fencing at Runtime operation boundaries only. If a model or tool
-operation has already emitted `MODEL_STARTED` or `TOOL_STARTED`, it must be allowed to reach its
-frozen Core terminal fact before future work is stopped. Coordination failure may prevent future
-Core work but may never rewrite an already-established Core fact.
+P7 仅在 Runtime 操作边界提供协作式执行隔离。若模型或工具已经发出 `MODEL_STARTED` 或 `TOOL_STARTED`，必须允许其到达真实的 Core 终态事实，然后才能阻止未来工作。协调失败可以阻止后续 Core 工作，但不能改写已经形成的 Core 事实。
 
-This is not external-resource fencing. A remote system called by a tool cannot be made safe from a
-stale owner without that resource participating in a fencing-token or idempotency protocol.
+这不是外部资源隔离。工具调用的远程系统若不参与 Fencing Token 或幂等协议，就无法阻止过期持有者在该系统产生副作用。
 
-### Failure model and Core outcomes
+### 失败模型与 Core 结果
 
-Coordination failures are harness/infrastructure outcomes, not Runtime Core outcomes. Therefore P7
-does not add `COORDINATION_ERROR`, `REDIS_ERROR`, or `LEASE_LOST` to `AgentStopReason`.
+协调失败属于 Harness / 基础设施结果，而不是 Runtime Core 结果。因此 P7 不向 `AgentStopReason` 增加 `COORDINATION_ERROR`、`REDIS_ERROR` 或 `LEASE_LOST`。
 
-The exception hierarchy is:
+异常层级：
 
 ```text
 ExecutionCoordinationException
@@ -116,182 +88,103 @@ ExecutionCoordinationException
   `- CoordinationUnavailableException
 ```
 
-The result types of `RunLeaseStore` remain Redis-neutral and do not collapse distinct outcomes into
-booleans:
+`RunLeaseStore` 的结果保持 Redis 中立，且不将不同结果压缩成布尔值：
 
-- acquire: acquired, already active, or coordination unavailable;
-- renew: renewed, explicit ownership loss, or coordination unavailable;
-- release: released, no longer owner, or coordination unavailable.
+- 获取：成功、已被占用或协调不可用；
+- 续租：成功、明确丢失所有权或协调不可用；
+- 释放：成功、不再是持有者或协调不可用。
 
-### P6 and P7 failure precedence
+### P6 与 P7 失败优先级
 
-If persistence and coordination both fail during the same already-started operation, the caller's
-primary exception is `ExecutionPersistenceException`. This preserves the P6 caller-visible contract.
-The coordination failure must remain available for diagnostics in the future, for example as a
-suppressed exception or structured observation. It must not replace the persistence failure or
-rewrite Core truth.
+如果同一次已经开始的操作同时发生持久化和协调失败，调用方的首要异常是 `ExecutionPersistenceException`，以保留 P6 的调用方可见契约。协调失败必须保留为诊断信息，例如 suppressed exception 或结构化观测；它不能替换持久化失败或改写 Core 事实。
 
-This precedence applies only after execution has entered the P6/Runtime path and both infrastructure
-failures exist. If lease acquisition fails before P6 durable admission, only the corresponding
-`ExecutionCoordinationException` is returned; no persistence failure exists.
+该优先级只适用于执行已经进入 P6 / Runtime 路径且两种基础设施失败都存在的情况。如果租约获取在 P6 持久化准入前失败，只返回相应的 `ExecutionCoordinationException`，因为尚不存在持久化失败。
 
-P7.1 does not modify P6 to synthesize this dual-failure path. It freezes the rule for later
-composition work.
+P7.1 不通过修改 P6 伪造双重失败路径，只为后续组合冻结规则。
 
-### Configuration contract
+### 配置契约
 
-The Redis adapter is configured by `enabled`, `keyPrefix`, `leaseTtl`, `renewInterval`, and
-`watchdogThreads`.
-Defaults are disabled, prefix `mma:coord:v1:run`, TTL 60 seconds, and renewal interval 20 seconds.
-The watchdog scheduler defaults to four shared daemon threads. Both durations must be positive,
-the prefix must be non-blank, the scheduler capacity must be positive, and three renewal intervals
-must fit within one TTL.
+Redis Adapter 由 `enabled`、`keyPrefix`、`leaseTtl`、`renewInterval` 和 `watchdogThreads` 配置。默认关闭，前缀为 `mma:coord:v1:run`，TTL 为 60 秒，续租间隔为 20 秒，共享 Watchdog Scheduler 默认有 4 个 Daemon 线程。两个时长必须为正，前缀非空，线程容量为正，且一个 TTL 至少容得下三个续租间隔。
 
-Declaring these properties alone does not enable coordination. When the feature is explicitly
-enabled, Spring may compose the Redis store, one shared renewal scheduler, a watchdog factory, and
-the coordination boundary middleware. The application execution entry point is still not switched
-to the coordinated flow.
+声明这些配置本身不会启用协调。显式启用后，Spring 可以组合 Redis Store、一个共享续租 Scheduler、Watchdog Factory 和协调边界 Middleware；但应用执行入口仍未切换到协调流程。
 
-### P7.2 Redis lease primitives
+### P7.2 Redis 租约原语
 
-P7.2 implements the `RunLeaseStore` port with Spring Data Redis while leaving execution lifecycle
-unwired. Acquire is one atomic Redis `SET key token NX PX ttl` operation. Renew uses an atomic Lua
-compare-token-and-`PEXPIRE` script, and release uses an atomic Lua compare-token-and-`DEL` script.
-Redis client failures map to the existing coordination-unavailable results and do not leak Redis or
-Lettuce exceptions through the domain port. The adapter never changes `RunLeaseSession`; lifecycle
-state remains the responsibility of later coordination wiring.
+P7.2 使用 Spring Data Redis 实现 `RunLeaseStore` 端口，但不接入执行生命周期。获取使用一次原子 Redis `SET key token NX PX ttl`。续租使用原子 Lua 脚本比较 Token 后执行 `PEXPIRE`；释放使用原子 Lua 脚本比较 Token 后执行 `DEL`。Redis 客户端失败映射为既有的“协调不可用”结果，不通过领域端口泄漏 Redis 或 Lettuce 异常。Adapter 不改变 `RunLeaseSession`；生命周期状态由后续协调接线负责。
 
-The adapter can be registered as a Spring bean only when
-`multimodal-agent.coordination.redis.enabled=true`. Merely defining the primitive does not acquire a
-lease or connect it to an Agent execution.
+只有 `multimodal-agent.coordination.redis.enabled=true` 时，Adapter 才能注册为 Spring Bean。仅定义原语不会获取租约，也不会接入 Agent 执行。
 
-### P7.3 coordinated execution lifecycle
+### P7.3 受协调的执行生命周期
 
-P7.3 composes one execution inside an ownership shell:
+P7.3 将一次执行放入所有权外壳：
 
 ```text
-acquire run lease
-  -> create ACTIVE RunLeaseSession
-  -> execute PersistentAgentExecutionCoordinator
-  -> token-based release in terminal cleanup
-  -> close RunLeaseSession
+获取 Run 租约
+  -> 创建 ACTIVE RunLeaseSession
+  -> 执行 PersistentAgentExecutionCoordinator
+  -> 终态清理时按 Token 释放租约
+  -> 关闭 RunLeaseSession
 ```
 
-Contention and unavailable acquisition fail closed before P6 durable admission. Once acquisition
-succeeds, cleanup attempts release even when P6 admission, Runtime, or persistence finalization
-fails. If delegate execution and cleanup both fail, the delegate exception remains primary and the
-coordination exception is suppressed. In particular, `ExecutionPersistenceException` retains the
-P6 precedence frozen above.
+租约竞争或不可用在 P6 持久化准入之前按封闭原则失败。获取成功后，即使 P6 准入、Runtime 或持久化收尾失败，清理逻辑仍会尝试释放。若委托执行和清理同时失败，委托异常仍是首要异常，协调异常作为 suppressed exception。尤其不能破坏上文冻结的 `ExecutionPersistenceException` 优先级。
 
-Release failure after a successful delegate cannot rewrite the completed Core result. An
-unavailable release is logged as `COORDINATION_UNAVAILABLE`; `NO_LONGER_OWNER` first moves the
-session to `LOST` and records explicit lease-loss diagnostics. Both then close the local session,
-without blind deletion, retry, or a new `AgentStopReason`.
+成功的委托执行之后，释放失败不能改写已完成的 Core 结果。释放不可用记为 `COORDINATION_UNAVAILABLE` 诊断；`NO_LONGER_OWNER` 先使 Session 进入 `LOST`，并记录明确的租约丢失诊断。两种情况随后都关闭本地 Session，不盲目删除、重试或新增 `AgentStopReason`。
 
-The lifecycle coordinator is deliberately not registered as the production application entry.
+生命周期 Coordinator 有意不注册为生产应用入口。
 
-### P7.4 watchdog renewal and safe-boundary enforcement
+### P7.4 Watchdog 续租与安全边界
 
-P7.4 starts one execution-scoped `RunLeaseWatchdog` after acquisition and before P6 admission. All
-watchdogs share an injected scheduler; no execution creates its own thread. Cleanup always stops
-the watchdog before token-based release, and `stop()` serializes with renewal so a stale scheduled
-task cannot renew after release.
+P7.4 在获取租约后、P6 准入前，为本次执行启动一个 `RunLeaseWatchdog`。所有 Watchdog 共用注入的 Scheduler；单次执行不创建独立线程。清理总是先停止 Watchdog，再按 Token 释放；`stop()` 与续租串行化，避免旧任务在释放后再次续租。
 
-Each tick atomically renews through `RunLeaseStore`. `RENEWED` preserves `ACTIVE`.
-`EXPLICIT_LEASE_LOSS`, `COORDINATION_UNAVAILABLE`, and unexpected renewal exceptions permanently
-move the session to `LOST`, preserving the first failure. Infrastructure recovery cannot revive
-that execution's authority.
+每次 Tick 通过 `RunLeaseStore` 原子续租。`RENEWED` 保持 `ACTIVE`；`EXPLICIT_LEASE_LOSS`、`COORDINATION_UNAVAILABLE` 和意外续租异常都使 Session 永久进入 `LOST`，并保留第一次失败。基础设施恢复不能让该执行重新取得权限。
 
-The coordination middleware is outer to the persistence middleware:
+协调 Middleware 位于持久化 Middleware 外层：
 
 ```text
-coordination pre-check
-  -> persistence pre-check
-    -> Core operation
-  -> persistence post-check
--> coordination post-check
+协调前置检查
+  -> 持久化前置检查
+    -> Core 操作
+  -> 持久化后置检查
+-> 协调后置检查
 ```
 
-Its order is 100 and persistence order is 200. The current `RunLeaseSession` reaches the single
-`AgentRuntimeContext` through a generic harness context contributor and typed `RuntimeAttributes`;
-there is no `ThreadLocal`, static execution registry, second context, or Redis lookup per boundary.
+协调顺序值为 100，持久化顺序值为 200。当前 `RunLeaseSession` 通过通用 Harness Context Contributor 和强类型 `RuntimeAttributes` 进入唯一的 `AgentRuntimeContext`；不存在 `ThreadLocal`、静态执行 Registry、第二套 Context 或每个边界上的 Redis 查询。
 
-If ownership is already lost, a new Model or Tool operation cannot start. If ownership is lost
-during an already-started operation, that operation still emits its truthful `MODEL_COMPLETED`,
-`MODEL_FAILED`, `TOOL_SUCCEEDED`, or `TOOL_FAILED` fact before the post-check stops future work.
-The Core uses its frozen middleware outcome `RUN_STOPPED(INTERNAL_ERROR)`. The outer coordinator
-then exposes the session's specific `RunLeaseLostException` or `CoordinationUnavailableException`
-to the caller. If persistence also failed, `ExecutionPersistenceException` remains primary and the
-coordination failure is retained as one suppressed diagnostic.
+若所有权已丢失，新 Model 或 Tool 操作不得开始。若在已经开始的操作过程中丢失所有权，该操作仍先发出真实的 `MODEL_COMPLETED`、`MODEL_FAILED`、`TOOL_SUCCEEDED` 或 `TOOL_FAILED`，然后才由后置检查阻止未来工作。Core 使用已冻结的 Middleware 结果 `RUN_STOPPED(INTERNAL_ERROR)`。外层 Coordinator 随后向调用方暴露 Session 对应的 `RunLeaseLostException` 或 `CoordinationUnavailableException`。若持久化也失败，`ExecutionPersistenceException` 仍是首要异常，协调失败保留为一个 suppressed 诊断。
 
-P7.4 is cooperative fencing at Runtime boundaries. It does not fence external systems called by a
-tool, interrupt an in-flight remote request, recover a lost run, or transfer execution to a new
-owner.
+P7.4 是 Runtime 边界上的协作式隔离，不隔离工具调用的外部系统，不中断正在进行的远程请求，也不恢复丢失的 Run 或将执行移交新持有者。
 
-### P7H concurrency and lifecycle invariants
+### P7H 并发与生命周期不变量
 
-P7H freezes the following coordination invariants:
+P7H 冻结以下约束：
 
-- `stop()` and renewal are linearized on one watchdog monitor. `stop()` waits for an in-flight
-  renewal, and once it returns no renewal remains inside `RunLeaseStore` and no later scheduled
-  callback can perform a meaningful renewal. Cleanup must preserve the order `stop -> release`.
-- A delayed old-token renewal remains safe after release or re-ownership because Redis renew is an
-  atomic compare-token-and-expire operation. It can neither extend nor delete a new owner's lease.
-- `LOST` is irreversible for an execution. A later healthy Redis response cannot restore authority,
-  and P7 never automatically reacquires a lost lease.
-- `CLOSED` is terminal. Asynchronous renewal and scheduler callbacks use a no-op transition when
-  cleanup has already begun; they cannot produce `CLOSED -> LOST`, revive authority, or leak a
-  lifecycle exception from the callback.
-- Explicit token loss and coordination unavailability remain distinct diagnostics, even though
-  both fail closed and prevent future Core work.
-- Scheduler availability is part of coordination availability. Closing the production scheduler
-  notifies all active watchdogs and transitions their sessions to
-  `LOST(COORDINATION_UNAVAILABLE)`; initial scheduling rejection has the same fail-closed outcome.
-- The shared scheduler is an availability boundary because renewal uses blocking Redis calls. Two
-  threads allow two slow calls to starve every other run, so the conservative default is four and
-  `watchdogThreads` is configurable. This is capacity hardening, not dynamic autoscaling.
-- Stop-before-release safety deliberately waits behind an in-flight Redis renewal. That wait is
-  safe only when Redis operations have bounded completion. Production configuration sets both
-  Lettuce command timeout and connection timeout to 2 seconds. An operation that must first connect
-  and then issue a command is therefore bounded by their sequential budget (approximately four
-  seconds, plus local scheduling overhead), rather than waiting indefinitely.
-- Context contributors enrich the one existing `AgentRuntimeContext` in request order, exactly once
-  per execution. They cannot replace the context or execute Core work. A contributor failure before
-  Core start produces no Core events; the outer coordination shell still stops renewal, releases
-  the lease, and closes the session.
-- Middleware orders 100 (coordination) and 200 (persistence) are semantic contracts, not incidental
-  values. The real invocation order is coordination pre-check, persistence pre-check, Core,
-  persistence post-check, coordination post-check. Equal middleware orders retain registration
-  order through the extension kernel's stable sort.
-- Persistence/coordination failure precedence is timing-independent. When both exist for an
-  already-started operation, `ExecutionPersistenceException` remains primary. Coordination
-  observations are suppressed diagnostics. Duplicate observations of the same explicit ownership
-  loss are collapsed, while distinct unavailable failures from session, watchdog-stop, and release
-  origins are retained.
-- A completed Model or Tool operation keeps its truthful Core terminal event even when persistence
-  or coordination fails at the following safe boundary. Future Model or Tool work is fail-stopped;
-  established facts are never rewritten.
-- Scheduler shutdown, slow renewal, and shared capacity affect availability only. They do not make
-  Redis an execution-truth authority and do not introduce recovery, replay, takeover, or external
-  side-effect fencing.
+- `stop()` 与续租在同一个 Watchdog Monitor 上线性化。`stop()` 等待正在进行的续租；返回后，`RunLeaseStore` 内没有仍在执行的续租，后续调度回调也不能进行有效续租。清理顺序必须是 `stop -> release`。
+- 旧 Token 的延迟续租在释放或重新取得所有权后仍安全，因为 Redis 续租是原子的“比较 Token 后续期”。它既不能延长，也不能删除新持有者的租约。
+- 对一次执行而言，`LOST` 不可逆。Redis 后来恢复正常也不能恢复权限；P7 不自动重新获取已丢失的租约。
+- `CLOSED` 是终态。清理开始后，异步续租和 Scheduler 回调采用无操作状态转换；它们不能产生 `CLOSED -> LOST`、恢复权限或从回调泄漏生命周期异常。
+- Token 明确丢失与协调不可用保持不同诊断，尽管两者都封闭式失败并阻止后续 Core 工作。
+- Scheduler 可用性也是协调可用性的一部分。关闭生产 Scheduler 会通知所有活跃 Watchdog，使其 Session 变为 `LOST(COORDINATION_UNAVAILABLE)`；首次调度被拒绝同样按封闭原则处理。
+- 共享 Scheduler 是可用性边界，因为续租使用阻塞 Redis 调用。仅两个线程时，两次慢调用便可饿死其他所有 Run；因此保守默认值为 4，且 `watchdogThreads` 可配置。这是容量加固，不是动态扩容。
+- “先停止再释放”的安全性要求等待正在进行的 Redis 续租。只有 Redis 操作有完成时限，这种等待才安全。生产配置将 Lettuce 命令超时和连接超时均设为 2 秒。若操作先连接、再发命令，顺序预算约为 4 秒，加上本地调度开销，而不是无限等待。
+- Context Contributor 按请求顺序、每次执行恰好一次地补充唯一的 `AgentRuntimeContext`。它不能替换 Context 或执行 Core 工作。Contributor 在 Core 启动前失败时，没有 Core 事件；外层协调外壳仍停止续租、释放租约并关闭 Session。
+- Middleware 顺序值 100（协调）和 200（持久化）是语义契约，不是偶然数字。实际调用顺序为协调前检、持久化前检、Core、持久化后检、协调后检。顺序值相同的 Middleware 通过扩展内核稳定排序保留注册顺序。
+- 持久化/协调失败的优先级不受时序影响。同一次已经开始的操作同时存在两者时，`ExecutionPersistenceException` 仍为首要异常。协调观测作为 suppressed 诊断。同一次明确所有权丢失的重复观测合并；来自 Session、Watchdog Stop 和 Release 的不同“不可用”失败分别保留。
+- 完成的 Model 或 Tool 操作即使在随后的安全边界遇到持久化或协调失败，也保留真实的 Core 终态事件。后续 Model 或 Tool 工作按封闭原则停止；既有事实永不改写。
+- Scheduler 关闭、慢续租与共享容量仅影响可用性，不使 Redis 成为执行事实权威，也不引入恢复、重放、接管或外部副作用隔离。
 
-### Deferred concerns
+### 暂缓事项
 
-P7 intentionally does not implement:
+P7 有意不实现：
 
-- production activation of the coordinated execution flow;
-- recovery, replay, retry, cancellation, pause/resume, or streaming;
-- session-level serialization, queuing, or new-message interruption;
-- Redis Pub/Sub or Streams;
-- fencing tokens/epochs or external-resource fencing;
-- tool idempotency, distributed transactions, or exactly-once external side effects.
+- 生产环境启用协调执行流程；
+- 恢复、重放、重试、取消、暂停/恢复或流式；
+- Session 级串行化、排队或新消息打断；
+- Redis Pub/Sub 或 Streams；
+- Fencing Token / Epoch 或外部资源隔离；
+- 工具幂等、分布式事务或外部副作用恰好一次。
 
-These belong to later P7/P8/P10 phases.
+这些属于后续 P7 / P8 / P10 阶段。
 
-## Consequences
+## 后果
 
-The coordination contract remains deterministic and Redis-neutral, while the adapter maps its
-explicit outcomes to atomic Redis commands. Long-running ownership is maintained by a shared
-watchdog scheduler, and the execution-scoped session retains its small monotonic lifecycle. Runtime
-safe boundaries fail-stop future cooperative work without rewriting Core history. Production
-activation, recovery, cancellation, and external-resource fencing remain outside P7.
+协调契约保持确定性、Redis 中立，Adapter 将明确的结果映射为原子 Redis 命令。共享 Watchdog Scheduler 维护长时执行的所有权，执行级 Session 保持精简且单调的生命周期。Runtime 安全边界会阻止未来的协作式工作，但不会改写 Core 历史。生产启用、恢复、取消和外部资源隔离仍不属于 P7。

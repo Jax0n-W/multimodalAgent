@@ -1,109 +1,81 @@
-# ADR-007: Unified Streaming and Execution Control Contract
+# ADR-007：统一流式执行与执行控制契约
 
-- Status: Accepted for P8.1 contract foundation
-- Date: 2026-09-17
+- 状态：P8.1 契约基础已接受
+- 日期：2026-09-17
 
-## Context
+## 背景
 
-The frozen Runtime Core produces authoritative Model, Tool, and Run facts through `AgentEvent` and
-returns one terminal `AgentRunResult`. P6 projects those facts into durable history. P7 protects
-ephemeral active ownership with a Redis lease. None of those contracts provides a unified live
-stream for clients or a semantic contract for requesting cancellation.
+已冻结的 Runtime Core 通过 `AgentEvent` 产生权威的 Model、Tool 和 Run 事实，并返回一个终态 `AgentRunResult`。P6 将这些事实投影为持久历史；P7 用 Redis 租约保护临时活跃所有权。但这些契约尚未提供面向客户端的统一实时流，也没有定义请求取消的语义。
 
-P8 will eventually support:
+P8 最终需要支持：
 
 ```text
-Runtime -> live execution stream -> client
-client  -> execution control intent -> Runtime
+Runtime -> 实时执行流 -> 客户端
+客户端 -> 执行控制意图 -> Runtime
 ```
 
-P8.1 defines only the semantic foundation and type contracts. It does not integrate a streaming
-model provider, create an SSE endpoint or StreamHub, connect cancellation checkpoints to the
-Runtime, or implement distributed control.
+P8.1 只定义语义基础与类型契约，不集成流式模型提供方、不创建 SSE 端点或 StreamHub、不把取消检查点接入 Runtime，也不实现分布式控制。
 
-## Problem
+## 问题
 
-Model output fragments, Runtime facts, and control observations must be visible in one ordered live
-projection without turning that projection into another execution state machine. Cancellation must
-be expressible without interrupting an already-started operation, bypassing Tool Governance,
-rewriting terminal facts, or collapsing P6/P7 failure semantics.
+模型输出片段、Runtime 事实和控制观测必须呈现在同一个有序实时投影中，但该投影不能成为另一套执行状态机。取消必须可以表达，同时不能中断已开始的操作、绕过 Tool Governance、改写终态事实，或混淆 P6/P7 的失败语义。
 
-The contract must also preserve the existing dependency direction: Runtime may understand generic
-execution-control semantics, but it must not know about HTTP, SSE, WebFlux, Reactor, Redis,
-Pub/Sub, controllers, persistence adapters, or node identity.
+依赖方向也必须保留：Runtime 可以理解通用执行控制语义，但不能知道 HTTP、SSE、WebFlux、Reactor、Redis、Pub/Sub、Controller、持久化 Adapter 或节点身份。
 
-## Decision
+## 决策
 
-### Authority boundaries
+### 权威边界
 
-Five authorities remain separate:
+五类权威保持分离：
 
 ```text
 Runtime Core
-    = Model / Tool / Run execution truth
+    = Model / Tool / Run 的执行事实
 
 MySQL
-    = successfully persisted durable history
-      + durable run identity
+    = 成功持久化的历史 + 持久化 Run 身份
 
 Redis Run Lease
-    = ephemeral active execution ownership
+    = 临时活跃执行所有权
 
 Unified Execution Stream
-    = live observation and projection only
+    = 仅实时观测与投影
 
 Execution Control
-    = intent requesting future execution behavior
+    = 请求未来执行行为的意图
 ```
 
-A stream message cannot decide whether Runtime succeeded or failed. A cancellation marker cannot
-directly mutate durable Run state. Redis control state cannot become the Runtime state machine. An
-SSE connection cannot own the execution lifecycle.
+流消息不能决定 Runtime 是否成功或失败。取消标记不能直接改变持久化 Run 状态。Redis 控制状态不能成为 Runtime 状态机。SSE 连接不能拥有执行生命周期。
 
-### Live projection envelope
+### 实时投影信封
 
-`ExecutionStreamEvent` is an immutable envelope with:
+`ExecutionStreamEvent` 是不可变信封，包含：
 
 ```text
 runId
 streamSequence
 occurredAt
 kind
-typed payload
+强类型 payload
 ```
 
-The allowed kinds are:
+允许的 `kind` 为 `RUNTIME_EVENT`、`MODEL_DELTA`、`CONTROL_EVENT`。Payload 构成 sealed 层级：
 
-```text
-RUNTIME_EVENT
-MODEL_DELTA
-CONTROL_EVENT
-```
+- `RuntimeEventPayload` 保留原始 `AgentEvent` 对象，不复制或修改；
+- `ModelDelta` 表示观测到的提供方文本片段；
+- `ControlEvent` 表示观测到的执行控制状态。
 
-Payloads form a sealed hierarchy:
+信封拒绝缺失身份、非正数序号、缺失时间戳、缺失 kind 或 payload、kind/payload 不匹配，以及包裹了不同 `runId` 的 Runtime 事件。不使用 `Map<String, Object>` 或无类型 Payload。
 
-- `RuntimeEventPayload` holds the original `AgentEvent` object without copying or changing it;
-- `ModelDelta` represents an observed provider text fragment;
-- `ControlEvent` represents observed execution-control state.
+对于 `RUNTIME_EVENT`，包裹的事实保留其原始 `occurredAt`；对于 Model 和 Control 观测，信封 `occurredAt` 是未来实时 Publisher 提供的观测时间。时间戳不构成第二种排序权威；顺序由 `streamSequence` 决定。
 
-The envelope rejects missing identity, non-positive sequence, missing timestamp, missing kind or
-payload, kind/payload mismatch, and a wrapped Runtime event from a different `runId`. It does not
-use `Map<String, Object>` or untyped payloads.
+Stream 包位于 `agent.runtime` 之外，可以向内依赖 Runtime 事实和通用控制类型。Runtime 不得向外依赖实时流契约。
 
-For `RUNTIME_EVENT`, the envelope keeps the wrapped fact's original `occurredAt`; for Model and
-Control observations, `occurredAt` is the observation time supplied by the future live publisher.
-This timestamp does not create a second ordering authority: ordering is defined by
-`streamSequence`.
+### Runtime 事件序号与实时流序号
 
-The stream package is outside `agent.runtime`. It may depend inward on Runtime facts and generic
-control types. Runtime must never depend outward on the live-stream contract.
+`AgentEvent.sequence` 仍表示权威 Runtime Core 事实的顺序，保持不变，且不包含 Model Delta 或 Control 观测。
 
-### Runtime event sequence and stream sequence
-
-`AgentEvent.sequence` remains the order of authoritative Runtime Core facts. It is unchanged and
-never contains model deltas or control observations.
-
-`ExecutionStreamEvent.streamSequence` orders all live observations emitted for one `runId`:
+`ExecutionStreamEvent.streamSequence` 对同一 `runId` 的所有实时观测排序，例如：
 
 ```text
 streamSequence=1  RUNTIME_EVENT  RUN_STARTED
@@ -113,117 +85,86 @@ streamSequence=4  MODEL_DELTA    " world"
 streamSequence=5  RUNTIME_EVENT  MODEL_COMPLETED
 ```
 
-One live execution stream for one runId has exactly one streamSequence authority.
-Individual RuntimeEvent, ModelDelta, and ControlEvent producers do not own independent sequence spaces.
+**一个 `runId` 的一条实时执行流，恰好只有一个 `streamSequence` 分配权威。`RuntimeEvent`、`ModelDelta` 和 `ControlEvent` 的各个生产者不得拥有独立的序号空间。**
 
-That single run-scoped authority assigns every envelope sequence, regardless of whether the
-observation originated from a Runtime fact, Model provider, or Control boundary. The shared
-sequence starts at 1, is strictly increasing, and has no duplicate value within the logical live
-stream for that Run. Producers submit observations to this authority; they do not allocate their
-own counters. Multiple subscribers observe the same logical sequence space rather than creating a
-new sequence space per subscriber or producer.
+这个 Run 级权威为每个信封分配序号，不论观测来自 Runtime 事实、模型提供方还是控制边界。共享序号从 1 开始，严格递增，在该 Run 的逻辑实时流中不重复。生产者只提交观测，不自行分配计数器。多个订阅者观察同一个逻辑序号空间，不为每个订阅者或生产者另建序号空间。
 
-P8.1 validates the value boundary and freezes sequence ownership, but deliberately does not
-implement the run-scoped sequencer or publisher that will enforce this contract in P8.3.
+P8.1 验证序号值边界并冻结其归属，但刻意不实现 Run 级 Sequencer 或 Publisher；这由 P8.3 完成。这不是分布式、全局持久顺序。P8.1 不承诺断线重放、跨节点延续序号、Redis 历史或缺口修复。
 
-This is not a distributed, globally durable order. P8.1 does not promise replay after reconnect,
-cross-node sequence continuation, Redis-backed history, or gap repair.
+### Model Delta 语义
 
-### Model delta semantics
+`MODEL_DELTA` 是提供方输出的观测，不是 Runtime 执行事实。它不能替代 `MODEL_COMPLETED` / `MODEL_FAILED`、触发 Runtime 状态转换、改变 `AgentRunResult`，或被持久化解释为完整模型响应。
 
-`MODEL_DELTA` is a provider-output observation, not a Runtime execution fact. It cannot replace
-`MODEL_COMPLETED` or `MODEL_FAILED`, produce a Runtime transition, change `AgentRunResult`, or be
-durably interpreted as a completed Model response.
-
-Future P8.2 streaming adapters must follow this shape:
+未来 P8.2 流式 Adapter 遵循：
 
 ```text
-provider stream
-  -> emit MODEL_DELTA observations
-  -> accumulate provider output
-  -> construct one complete ModelTurn
-  -> return ModelTurn to the existing AgentRunner
+提供方流
+  -> 发出 MODEL_DELTA 观测
+  -> 累积提供方输出
+  -> 构造一个完整 ModelTurn
+  -> 返回既有 AgentRunner
 ```
 
-`AgentRunner` remains a `ModelTurn` consumer and must not become a token-driven state machine.
+`AgentRunner` 仍消费 `ModelTurn`，不能变成逐 Token 驱动的状态机。
 
-### Tool-call accumulation rule
+### ToolCall 累积规则
 
-Provider streams may fragment a ToolCall ID, name, or arguments. A partial ToolCall is only
-provider protocol state. It must never enter `ToolExecutor` or trigger an external side effect.
+提供方流可能把 ToolCall ID、名称或参数拆成多个片段。部分 ToolCall 只是提供方协议的中间状态，绝不能进入 `ToolExecutor` 或触发外部副作用。
 
-Future adapters must accumulate and validate the complete provider ToolCall, construct a complete
-`ToolCall`/`ModelTurn`, and return it to `AgentRunner`. The existing P3 path then remains mandatory:
+未来 Adapter 必须累积并验证完整 ToolCall，构造完整 `ToolCall` / `ModelTurn`，再交给 `AgentRunner`。既有 P3 治理链仍强制执行：
 
 ```text
-complete ModelTurn
-  -> ToolRegistry resolve
-  -> deserialize
+完整 ModelTurn
+  -> ToolRegistry 查找
+  -> 反序列化
   -> Jakarta Validation
   -> Tool Policy
-  -> cancellation checkpoint
+  -> 取消检查点
   -> TOOL_STARTED
   -> AgentTool.execute
 ```
 
-Streaming cannot bypass Tool Governance.
+流式不能绕过 Tool Governance。
 
-### ExecutionControl semantics
+### `ExecutionControl` 语义
 
-`ExecutionControl` is a provider-neutral and infrastructure-neutral cancellation-intent contract.
-It extends the existing `CancellationContext`, so it can be propagated through the existing Runtime
-context without modifying frozen execution components.
+`ExecutionControl` 是与提供方及基础设施无关的取消意图契约。它扩展既有 `CancellationContext`，因此可以通过 Runtime Context 传递，而无需修改已冻结的执行组件。
 
-Its state axis is deliberately minimal:
+状态轴刻意精简：
 
 ```text
 RUNNING -> CANCEL_REQUESTED
 ```
 
-`requestCancel()` is atomic, monotonic, and idempotent:
+`requestCancel()` 是原子、单调、幂等操作：首次请求返回 `ACCEPTED`；后续返回 `ALREADY_REQUESTED`；同一次执行中不能从 `CANCEL_REQUESTED` 回到 `RUNNING`。
 
-- the first request returns `ACCEPTED`;
-- later requests return `ALREADY_REQUESTED`;
-- `CANCEL_REQUESTED` cannot transition back to `RUNNING` within the same execution.
+`CancelRequestResult` 还为未来活跃执行服务保留 `ALREADY_TERMINAL` 和 `NOT_ACTIVE`。本地 `ExecutionControl` 不判断 Run 是否持久化、是否终态或是否注册在其他节点；这些结果由未来外层控制服务负责。
 
-`CancelRequestResult` also reserves boundary outcomes for a future active-execution service:
+### 协作式取消
 
-```text
-ACCEPTED
-ALREADY_REQUESTED
-ALREADY_TERMINAL
-NOT_ACTIVE
-```
-
-The local `ExecutionControl` does not determine whether a Run is durable, terminal, or registered
-on another node. A future outer control service owns `ALREADY_TERMINAL` and `NOT_ACTIVE`.
-
-### Cooperative cancellation
-
-Cancellation is cooperative. `requestCancel()` does not mean:
+取消是协作式的。调用 `requestCancel()` 不等于：
 
 ```text
 Thread.interrupt()
 Future.cancel(true)
-kill provider HTTP request
-kill Tool invocation
-mutate AgentRunEntity
-delete or invalidate a Redis lease
+终止提供方 HTTP 请求
+终止 Tool 调用
+修改 AgentRunEntity
+删除或作废 Redis 租约
 ```
 
-An already-started Model or Tool operation retains a truthful terminal Core fact:
+已经开始的 Model 或 Tool 操作保留真实的 Core 终态事实：
 
 ```text
-MODEL_STARTED -> MODEL_COMPLETED or MODEL_FAILED
-TOOL_STARTED  -> TOOL_SUCCEEDED or TOOL_FAILED
+MODEL_STARTED -> MODEL_COMPLETED 或 MODEL_FAILED
+TOOL_STARTED  -> TOOL_SUCCEEDED 或 TOOL_FAILED
 ```
 
-Cancellation may only prevent future work at an explicit safe checkpoint. P8.1 defines this rule
-but does not wire checkpoints into `AgentRunner` or `ToolExecutor`.
+取消只能在显式安全检查点阻止未来工作。P8.1 定义规则，但不把检查点接入 `AgentRunner` 或 `ToolExecutor`。
 
-### Safe checkpoints
+### 安全检查点
 
-The frozen checkpoint vocabulary is:
+冻结的检查点名称：
 
 ```text
 BEFORE_MODEL
@@ -232,8 +173,7 @@ BEFORE_TOOL_EXECUTION
 AFTER_TOOL_EXECUTION
 ```
 
-The future `BEFORE_TOOL_EXECUTION` check belongs after Tool resolution, deserialization,
-validation, Policy evaluation, and `ALLOW`, but before `TOOL_STARTED` and the actual side effect:
+未来的 `BEFORE_TOOL_EXECUTION` 检查位于工具查找、反序列化、验证、Policy 评估和 `ALLOW` 之后，但在 `TOOL_STARTED` 和真实副作用之前：
 
 ```text
 resolve -> deserialize -> validate -> policy(ALLOW)
@@ -242,188 +182,151 @@ resolve -> deserialize -> validate -> policy(ALLOW)
   -> AgentTool.execute
 ```
 
-Cancellation therefore neither skips nor redefines Tool Governance. The before/after Model and
-Tool checks stop only work that has not yet started.
+所以取消既不会跳过，也不会重新定义 Tool Governance。Model 和 Tool 的前后检查只阻止尚未开始的工作。
 
-### CANCELLED Runtime outcome
+### `CANCELLED` Runtime 结果
 
-Explicit cancellation is a legitimate future Runtime termination reason, unlike a P7
-infrastructure ownership failure. `AgentStopReason.CANCELLED` is therefore the frozen Core outcome
-for a cancellation observed at a safe checkpoint. Future P8.4 integration may emit:
+显式取消是未来合法的 Runtime 停止原因，与 P7 基础设施所有权失败不同。因此，在安全检查点观测到取消时，已冻结的 Core 结果是 `AgentStopReason.CANCELLED`。未来 P8.4 集成可以发出 `RUN_STOPPED(CANCELLED)`；P8.1 不发出该事件，也不修改 `AgentRunner`。不能仅因观测到取消意图，就把取消映射成 `MODEL_ERROR`、`TOOL_ERROR` 或 `INTERNAL_ERROR`。
 
-```text
-RUN_STOPPED(CANCELLED)
-```
+### 延迟与重复取消
 
-P8.1 does not emit that event and does not alter `AgentRunner`. Cancellation must never be mapped to
-`MODEL_ERROR`, `TOOL_ERROR`, or `INTERNAL_ERROR` merely because the intent was observed.
+当前 Core 调用一旦已经确定结果——`RUN_COMPLETED`、`RUN_STOPPED(CANCELLED)`、其他 `RUN_STOPPED` 原因或 `RUN_WAITING_APPROVAL`——之后的控制观测都不能改写该 Core 事实。对于已完成的调用，未来控制边界返回 `ALREADY_TERMINAL`，而不是把 `COMPLETED` 改成 `CANCELLED`。
 
-### Late and repeated cancellation
+`RUN_WAITING_APPROVAL` 是当前调用或执行片段的稳定结果，不表示持久化 Run 永久终结、永远不能继续。未来审批、Resume 或 Recovery 可以开始后续执行片段，但不能追溯改写此前进入 `WAITING_APPROVAL` 的调用。P8.1 不实现该继续流程。
 
-Once the current Core invocation has established its outcome—including `RUN_COMPLETED`,
-`RUN_STOPPED(CANCELLED)`, another `RUN_STOPPED` reason, or `RUN_WAITING_APPROVAL`—a later control
-observation cannot rewrite that already-established Core fact. For a completed invocation, the
-future control boundary returns `ALREADY_TERMINAL` rather than changing `COMPLETED` into
-`CANCELLED`.
+终态前重复请求取消无害，返回 `ALREADY_REQUESTED`。`NOT_ACTIVE` 表示控制边界无法识别被请求 Run 的活跃或终态执行；P8.1 不实现区分这些情况所需的 Registry。
 
-`RUN_WAITING_APPROVAL` is a stable outcome of the current invocation or execution segment. It is
-not a declaration that the durable Run is permanently terminal or can never continue. A future
-approval, resume, or recovery flow may begin a later execution segment without retroactively
-rewriting the invocation that entered `WAITING_APPROVAL`. P8.1 does not implement that continuation.
+### 客户端断线语义
 
-Repeated cancellation before terminal completion is harmless and returns `ALREADY_REQUESTED`.
-`NOT_ACTIVE` means the control boundary cannot identify an active or terminal execution for the
-requested Run; P8.1 does not implement the registry needed to distinguish these cases.
-
-### Client disconnect semantics
-
-Transport lifecycle and execution lifecycle are independent:
+传输生命周期与执行生命周期独立：
 
 ```text
-SSE disconnect != cancel Run
+SSE 断线 != 取消 Run
 ```
 
-A browser refresh, mobile network interruption, client timeout, or explicit stream unsubscribe
-must not call `ExecutionControl.requestCancel()` implicitly. Cancellation requires an explicit
-control request.
+浏览器刷新、移动网络中断、客户端超时或显式取消订阅，都不能隐式调用 `ExecutionControl.requestCancel()`。取消必须有显式控制请求。
 
-### Streaming failure semantics
+### 流式失败语义
 
-Subscriber failure, slow-client behavior, SSE write failure, and subscriber disconnect affect
-observation availability only. They must not change `AgentRunResult`, `AgentStopReason`, Runtime
-events, Tool policy, persistence projections, or lease ownership.
+订阅者失败、慢客户端、SSE 写入失败与订阅者断线只影响观测可用性。它们不能改变 `AgentRunResult`、`AgentStopReason`、Runtime 事件、Tool Policy、持久化投影或租约所有权。Stream Publisher 必须隔离订阅者/传输失败与执行生产者；P8.1 尚不实现该 Publisher。
 
-The stream publisher must isolate subscriber/transport failures from the execution producer. P8.1
-does not implement this publisher.
+### 背压边界
 
-### Backpressure boundary
+Runtime 不能被缓慢的实时流订阅者无限期阻塞。未来 P8.3/P8H 可以使用有界订阅者缓冲区、断开慢订阅者，并且只对语义上可丢弃的观测定义丢弃行为；不得静默丢弃权威 Runtime 事实，同时声称提供完整流。
 
-Runtime must not be blocked indefinitely by a slow live-stream subscriber. Future P8.3/P8H work may
-use bounded subscriber buffers, disconnect slow subscribers, and define drop behavior only for
-semantically droppable observations. It must not silently drop authoritative Runtime facts while
-claiming a complete stream.
+P8.1 不引入 Reactor、Flux、缓冲策略或 SSE 传输实现。
 
-P8.1 does not introduce Reactor, Flux, buffer policy, or an SSE transport implementation.
+### 分布式控制边界
 
-### Distributed-control boundary
+分布式取消属于 P8.5。P8.1 不创建 Redis 取消标记、Pub/Sub、Streams、分布式活跃控制 Registry 或接管行为。
 
-Distributed cancellation belongs to P8.5. P8.1 does not create Redis cancel markers, Pub/Sub,
-Streams, a distributed active-control registry, or takeover behavior.
-
-Redis Run Lease and future Redis Control are independent:
+Redis Run Lease 与未来 Redis Control 彼此独立：
 
 ```text
-Redis Run Lease       = execution ownership
-Future Control Marker = cancellation intent
+Redis Run Lease       = 执行所有权
+Future Control Marker = 取消意图
 ```
 
-They must not share a key, value, token, or lifecycle. A future namespace candidate is:
+两者不得共用 Key、Value、Token 或生命周期。未来命名空间候选：
 
 ```text
 mma:control:v1:run:{runId}:cancel
 ```
 
-P8.1 does not create or access that key.
+P8.1 不创建或访问该 Key。
 
-### Failure precedence
+### 失败优先级
+
+**失败优先级按阶段决定，不是一个全局排名。Core 执行事实与调用方可见的基础设施结果是两个不同层次。**
+
+Core 终态事实一旦建立，后续持久化、协调、流式或控制观测都不能发出或合成不同的 Core 终态事实。对于 `WAITING_APPROVAL`，这一不可改写性同样适用于当前调用或执行片段的既定结果，但并不表示持久化 Run 永久终结。
+
+Core 事实不可改写，并不代表之后观测到的所有基础设施失败都只能作为诊断。外层执行生命周期完成前，调用方可见的基础设施失败优先级仍由已冻结的 P6/P7 执行外壳契约决定。P8 不建立新的全局排名，也不重定义这些调用方契约。
+
+当前 Core 调用尚未确定结果之前：
+
+- 已冻结的 P6/P7 调用方可见失败契约继续生效；
+- 取消只是控制意图，不能掩盖已经发生的持久化或协调失败；
+- 已开始的 Model 或 Tool 仍记录真实终态事实；
+- 如果取消在新工作开始前的安全检查点被观察到，而且该点没有 P6/P7 边界失败优先，那么未来 P8.4 可以确定 `RUN_STOPPED(CANCELLED)`。
+
+当前 Core 调用已经确定结果之后：
+
+- 后续观测不能合成第二个或不同的 Core 结果；
+- P6 持久化或收尾失败可按 ADR-005 继续对调用方可见，但不能改写 Core 事实；
+- P7 Watchdog Stop、协调边界和执行外壳失败维持既有的调用方可见或 suppressed 行为；
+- 流式传输失败与延迟控制观测属于观测/控制问题，不能替换既定 Core 事实。
+
+P7 已归类为终态清理诊断的失败仍只能作为诊断。特别是 Core 成功执行且持久化收尾完成后，Redis 比较并释放失败仍是终态清理诊断，不能替换 Core 结果。P8 不扩大该类别。
+
+P8 不重新分类 P7 的 Watchdog Stop、协调边界或执行外壳失败。`watchdog.stop()` 建立与进行中续租的线性化边界，保障先停止再释放；其既有 P7 失败行为与 Redis 释放失败不同，本 ADR 不将它声明为“只能诊断”。
+
+### 三条独立状态轴
+
+P8 不得制造统一的超级状态；各状态轴回答不同问题：
+
+| 状态轴 | 类型 | 回答的问题 |
+|---|---|---|
+| 所有权 | `RunLeaseSession` | 本次执行是否仍拥有该 Run？ |
+| 控制 | `ExecutionControl` | 是否已请求取消？ |
+| Runtime 结果 | `AgentRunResult` / `AgentStopReason` | Core 为何终止？ |
+
+所有权可能已经 `LOST`，而控制仍是 `RUNNING`；取消已请求时，工具仍可能成功完成；之后的控制请求不能改变已确定的 Runtime 终态结果。
+
+### 架构依赖规则
+
+允许的方向：
+
+```text
+外层实时流 / 控制 Adapter
+  -> Stream 契约
+  -> Runtime 事实 / 通用执行控制契约
+```
+
+Runtime 可以依赖通用控制契约，但不得依赖 Stream 包、Controller、Spring Web/WebFlux、Reactor、SSE Adapter、Redis、Spring Data Redis、持久化实现、Pub/Sub 或节点身份。Stream 契约本身保持传输与基础设施中立。ArchUnit 强制验证这些边界。
+
+## 暂缓事项
+
+P8.1 明确不实现：
+
+- 真实 Ollama/OpenAI 模型流式调用或 Spring AI Adapter 改动；
+- 逐 Token 驱动的 Runtime 执行、ToolCall 片段组装器；
+- StreamHub、SSE 端点、Reactor/Flux 集成或背压策略；
+- Runtime 检查点接线，或线程、Future、HTTP、Model、Tool 中断；
+- Redis 控制标记、Pub/Sub、Streams 或分布式取消；
+- 暂停、恢复、重试、Recover、Replay 或 Takeover；
+- Checkpoint 持久化、幂等、外部隔离或副作用 `UNKNOWN` 语义。
+
+这些属于 P8.2～P8.5、P8H 或 P10。
+
+## 后果
+
+流式是执行的实时投影，不是执行事实权威。Runtime 事件保留自己的语义序号；实时流使用独立的共享序号，将 Runtime 事实、模型增量和控制观测交错排序。
+
+取消是显式、幂等、单调且协作式的。已开始的操作保留真实的 Core 终态事实。传输失败、慢消费者、断线和延迟取消都不能改写执行事实。持久化历史、分布式所有权、实时观测、执行控制与 Runtime 结果始终是不同的语义权威。
+
+## 关键契约原文对照
+
+本节保留已由 `P8ContractDocumentationTest` 锁定的英文原句；对应中文语义已在上文阐明。翻译不改变这些冻结的约束。
+
+One live execution stream for one runId has exactly one streamSequence authority.
+Individual RuntimeEvent, ModelDelta, and ControlEvent producers do not own independent sequence spaces.
 
 Failure precedence is phase-aware, not a global ranking.
 Core execution truth and caller-visible infrastructure outcome are distinct layers.
 
+Caller-visible infrastructure failure precedence remains governed by the
+frozen P6/P7 execution-shell contracts until the outer execution lifecycle has completed.
+
 Once a Core terminal fact has been established, no later persistence, coordination, streaming, or
-control observation may emit or synthesize a different Core terminal fact. For
-`WAITING_APPROVAL`, the same immutability applies to the established outcome of the current
-invocation or execution segment; it does not make the durable Run permanently terminal.
+control observation may emit or synthesize a different Core terminal fact.
 
-Core-fact immutability does not mean that every infrastructure failure observed after a Core fact
-is diagnostic-only. Caller-visible infrastructure failure precedence remains governed by the
-frozen P6/P7 execution-shell contracts until the outer execution lifecycle has completed. P8 does
-not create a new global ranking and does not redefine those caller-visible contracts.
+Failures already classified by P7 as terminal cleanup diagnostics remain diagnostic-only.
 
-Before the current Core invocation outcome has been established:
+P8 does not reclassify P7 watchdog-stop, coordination-boundary, or execution-shell failures.
 
-- the frozen P6/P7 caller-visible failure contracts continue to apply;
-- cancellation is control intent and cannot hide a persistence or coordination failure that has
-  already occurred;
-- an already-started Model or Tool still records its truthful terminal fact;
-- if cancellation is observed at a safe checkpoint before new work starts, and no P6/P7 boundary
-  failure governs that point, future P8.4 may establish `RUN_STOPPED(CANCELLED)`.
-
-After the current Core invocation outcome has been established:
-
-- later observations cannot synthesize a second or different Core outcome;
-- P6 persistence or finalization failures may remain caller-visible exactly as ADR-005 defines,
-  without rewriting the Core fact;
-- P7 watchdog-stop, coordination-boundary, and execution-shell failures retain their existing
-  caller-visible or suppressed behavior;
-- streaming transport failures and late control observations remain observation/control concerns
-  and cannot replace the established Core fact.
-
-Failures already classified by P7 as terminal cleanup diagnostics remain diagnostic-only. In
-particular, after successful Core execution and durable finalization, a Redis compare-and-release
-failure remains a terminal cleanup diagnostic and does not replace the Core result. P8 does not
-broaden that category.
-
-P8 does not reclassify P7 watchdog-stop, coordination-boundary, or execution-shell failures. A
-`watchdog.stop()` call establishes the linearization boundary with an in-flight renewal and protects
-stop-before-release ordering. Its existing P7 failure behavior therefore remains distinct from a
+Its existing P7 failure behavior therefore remains distinct from a
 Redis release failure and is not declared diagnostic-only by this ADR.
 
-### Three independent state axes
-
-P8 must not create one aggregate super-state. The axes answer different questions:
-
-| Axis | Type | Question |
-|---|---|---|
-| Ownership | `RunLeaseSession` | Does this execution still own the Run? |
-| Control | `ExecutionControl` | Has cancellation been requested? |
-| Runtime result | `AgentRunResult` / `AgentStopReason` | Why did Core terminate? |
-
-Ownership may be `LOST` while control remains `RUNNING`; cancellation may be requested while a Tool
-finishes successfully; a terminal Runtime result remains final regardless of a later control
-request.
-
-### Architecture dependency rules
-
-The allowed direction is:
-
-```text
-outer live-stream/control adapters
-  -> stream contract
-  -> Runtime facts / generic execution-control contract
-```
-
-Runtime may depend on its generic control contract. Runtime must not depend on the stream package,
-controllers, Spring Web/WebFlux, Reactor, SSE adapters, Redis, Spring Data Redis, persistence
-implementation, Pub/Sub, or node identity.
-
-The stream contract itself remains transport- and infrastructure-neutral. ArchUnit enforces these
-boundaries.
-
-## Deferred concerns
-
-P8.1 deliberately does not implement:
-
-- real Ollama/OpenAI model streaming;
-- changes to Spring AI adapters;
-- token-driven Runtime execution;
-- ToolCall fragment assemblers;
-- StreamHub, SSE endpoint, Reactor/Flux integration, or backpressure policy;
-- Runtime checkpoint wiring;
-- thread, Future, HTTP, Model, or Tool interruption;
-- Redis control markers, Pub/Sub, Streams, or distributed cancellation;
-- pause, resume, retry, recover, replay, or takeover;
-- checkpoint persistence, idempotency, external fencing, or `UNKNOWN` side-effect semantics.
-
-These belong to P8.2 through P8.5, P8H, or P10.
-
-## Consequences
-
-Streaming is a live projection of execution, not an execution-truth authority. Runtime events keep
-their own semantic sequence; the live stream uses an independent sequence to interleave Runtime
-facts, model deltas, and control observations.
-
-Cancellation is explicit, idempotent, monotonic, and cooperative. An operation that has already
-started retains its truthful terminal Core fact. Transport failure, slow consumers, disconnects,
-and late cancellation cannot rewrite execution truth. Durable persistence, distributed ownership,
-live observation, execution control, and Runtime result remain separate semantic authorities.
+`RUN_WAITING_APPROVAL` is a stable outcome of the current invocation or execution segment. It is
+not a declaration that the durable Run is permanently terminal or can never continue.
