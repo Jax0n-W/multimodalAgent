@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class RealStreamingModelSmokeTest {
 
     private static final String DEFAULT_BASE_URL = "http://127.0.0.1:11434";
-    private static final String DEFAULT_MODEL = "mindbridge-qwen2.5-7b-ft:latest";
+    private static final String DEFAULT_MODEL = "multimodalAgent-qwen2.5-7b-ft:latest";
 
     @Test
     void streamsTextAndReconstructsOneCompleteTurn() {

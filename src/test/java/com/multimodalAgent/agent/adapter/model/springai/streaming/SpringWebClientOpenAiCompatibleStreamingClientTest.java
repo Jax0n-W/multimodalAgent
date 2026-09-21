@@ -1,6 +1,10 @@
 package com.multimodalAgent.agent.adapter.model.springai.streaming;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.multimodalAgent.agent.runtime.model.AgentMessage;
+import com.multimodalAgent.agent.runtime.model.AgentModelRequest;
+import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
+import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
@@ -11,6 +15,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -58,6 +64,67 @@ class SpringWebClientOpenAiCompatibleStreamingClientTest {
             );
             assertEquals(OpenAiStreamEvent.Done.INSTANCE, events.get(1));
             assertEquals("Bearer test-key", authorization.get());
+            assertTrue(requestBody.get().contains("\"stream\":true"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void replaysRawToolCallWireFixtureThroughCompleteModelTurnAssembly() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        String responseBody;
+        try (var fixture = Objects.requireNonNull(
+                getClass().getResourceAsStream(
+                        "/fixtures/openai-compatible-tool-call-stream.sse"
+                ),
+                "tool-call streaming fixture must exist"
+        )) {
+            responseBody = new String(fixture.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        AtomicReference<String> authorization = new AtomicReference<>();
+        AtomicInteger providerCalls = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            providerCalls.incrementAndGet();
+            respond(exchange, responseBody, requestBody, authorization);
+        });
+        server.start();
+
+        try {
+            SpringWebClientOpenAiCompatibleStreamingClient client =
+                    new SpringWebClientOpenAiCompatibleStreamingClient(
+                            "http://127.0.0.1:" + server.getAddress().getPort(),
+                            "test-key",
+                            objectMapper
+                    );
+            OpenAiCompatibleStreamingAgentModelAdapter adapter =
+                    new OpenAiCompatibleStreamingAgentModelAdapter(
+                            client,
+                            new OpenAiCompatibleStreamingOptions(
+                                    "fixture-provider",
+                                    "fixture-model",
+                                    0.0,
+                                    128
+                            ),
+                            objectMapper
+                    );
+
+            ModelTurn turn = adapter.generate(new AgentModelRequest(
+                    List.of(AgentMessage.user("Use the supplied tools")),
+                    List.of()
+            ));
+
+            assertEquals(1, providerCalls.get());
+            assertEquals(ModelFinishReason.TOOL_CALLS, turn.finishReason());
+            assertEquals(2, turn.toolCalls().size());
+            assertEquals("call-provider-001", turn.toolCalls().get(0).id());
+            assertEquals("lookup", turn.toolCalls().get(0).name());
+            assertEquals("Redis", turn.toolCalls().get(0).arguments().get("query"));
+            assertEquals("call-provider-002", turn.toolCalls().get(1).id());
+            assertEquals("summarize", turn.toolCalls().get(1).name());
+            assertEquals("Java Agents", turn.toolCalls().get(1).arguments().get("topic"));
             assertTrue(requestBody.get().contains("\"stream\":true"));
         } finally {
             server.stop(0);

@@ -96,9 +96,20 @@ The adapter and client require explicit construction. P8.2 does not replace the 
 non-streaming model path. The real Ollama streaming smoke remains tagged `real-model` and is excluded
 from default Maven/CI execution.
 
+P8.2 validates ToolCall streaming deterministically with a protocol-level raw SSE fixture replayed
+through the real WebClient parser, accumulator, and partial-call assembler. The fixture covers
+provider indexes, interleaved calls, fragmented names and arguments, provider ID preservation, and
+construction of one complete `ModelTurn.TOOL_CALLS`. It is deterministic wire-protocol evidence,
+not a claim that a live fine-tuned model will choose a tool for every prompt. Live provider ToolCall
+behavior remains an opt-in compatibility check when the local model/backend supports it reliably.
+
 ## Deferred
 
 P8.2 does not implement stream sequencing, StreamHub, SSE delivery to clients, subscribers,
 backpressure, reconnect/replay, Runtime cancellation checkpoints, provider abort, active execution
 registry, Redis control markers, Pub/Sub, distributed cancellation, pause, resume, retry, recovery,
 takeover, or external fencing.
+
+Provider invocation deadlines and streaming timeout semantics are also deferred to the P9 Model
+Gateway. P8.2 intentionally does not add Reactor timeout operators or timed blocking because those
+would introduce new model-failure semantics.

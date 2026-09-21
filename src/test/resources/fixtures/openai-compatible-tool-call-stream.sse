@@ -1,0 +1,9 @@
+data: {"id":"chatcmpl-tool-fixture","object":"chat.completion.chunk","created":1720000000,"model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-provider-001","type":"function","function":{"name":"look","arguments":"{\"query\":"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool-fixture","object":"chat.completion.chunk","created":1720000000,"model":"fixture-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call-provider-002","type":"function","function":{"name":"summarize","arguments":"{\"topic\":"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool-fixture","object":"chat.completion.chunk","created":1720000000,"model":"fixture-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"up","arguments":"\"Redis\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool-fixture","object":"chat.completion.chunk","created":1720000000,"model":"fixture-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"Java Agents\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
