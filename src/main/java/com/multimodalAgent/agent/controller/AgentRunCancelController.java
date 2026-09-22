@@ -4,6 +4,7 @@ import com.multimodalAgent.agent.dto.CancelRunResponse;
 import com.multimodalAgent.agent.runtime.control.CancelRequestResult;
 import com.multimodalAgent.agent.security.CurrentUser;
 import com.multimodalAgent.agent.streaming.integration.LocalRunCancellationService;
+import com.multimodalAgent.agent.streaming.integration.DistributedCancellationUnavailableException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -15,7 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-/** Explicit node-local cancellation endpoint; SSE disconnect remains observation-only. */
+/** Explicit cancellation endpoint; SSE disconnect remains observation-only. */
 @RestController
 @RequestMapping("/api/agent/runs")
 @ConditionalOnProperty(
@@ -44,6 +45,12 @@ public final class AgentRunCancelController {
                         throw new ResponseStatusException(HttpStatus.CONFLICT);
                     }
                     return new CancelRunResponse(result);
-                });
+                })
+                .onErrorMap(DistributedCancellationUnavailableException.class,
+                        failure -> new ResponseStatusException(
+                                HttpStatus.SERVICE_UNAVAILABLE,
+                                "Distributed cancellation outcome is unavailable",
+                                failure
+                        ));
     }
 }

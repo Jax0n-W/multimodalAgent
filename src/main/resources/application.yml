@@ -74,6 +74,12 @@ multimodal-agent:
       lease-ttl: ${REDIS_COORDINATION_LEASE_TTL:60s}
       renew-interval: ${REDIS_COORDINATION_RENEW_INTERVAL:20s}
       watchdog-threads: ${REDIS_COORDINATION_WATCHDOG_THREADS:4}
+  cancellation:
+    redis:
+      enabled: ${REDIS_CANCELLATION_ENABLED:false}
+      command-channel: ${REDIS_CANCELLATION_COMMAND_CHANNEL:mma:cancel:v1:command}
+      ack-channel: ${REDIS_CANCELLATION_ACK_CHANNEL:mma:cancel:v1:ack}
+      ack-timeout: ${REDIS_CANCELLATION_ACK_TIMEOUT:2s}
   ai:
     provider: ${AI_PROVIDER:ollama}
     temperature: ${AI_TEMPERATURE:0.35}
