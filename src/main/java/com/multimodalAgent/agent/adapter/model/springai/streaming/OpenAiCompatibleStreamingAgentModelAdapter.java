@@ -5,10 +5,16 @@ import com.multimodalAgent.agent.adapter.model.springai.SpringAiModelAdapterExce
 import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.AgentModelRequest;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelProviderException;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelTimeoutPolicy;
+import com.multimodalAgent.agent.runtime.model.gateway.TimeoutAwareAgentModel;
 import com.multimodalAgent.agent.stream.ModelDelta;
 import com.multimodalAgent.agent.stream.ModelDeltaObserver;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.function.Supplier;
 
@@ -19,7 +25,8 @@ import java.util.function.Supplier;
  * fragments are observable as ModelDelta values, while the return value remains one complete
  * ModelTurn. ToolCall fragments are never exposed to ToolExecutor before stream completion.</p>
  */
-public final class OpenAiCompatibleStreamingAgentModelAdapter implements AgentModel {
+public final class OpenAiCompatibleStreamingAgentModelAdapter
+        implements AgentModel, TimeoutAwareAgentModel {
 
     private static final System.Logger LOGGER = System.getLogger(
             OpenAiCompatibleStreamingAgentModelAdapter.class.getName()
@@ -98,7 +105,20 @@ public final class OpenAiCompatibleStreamingAgentModelAdapter implements AgentMo
 
     @Override
     public ModelTurn generate(AgentModelRequest request) {
+        // Compatibility path for focused adapter tests and non-production callers. Production
+        // supplies the configured policy through ModelGateway.
+        return generate(request, new ModelTimeoutPolicy(
+                Duration.ofMinutes(2), Duration.ofSeconds(30)
+        ));
+    }
+
+    @Override
+    public ModelTurn generate(
+            AgentModelRequest request,
+            ModelTimeoutPolicy timeoutPolicy
+    ) {
         Objects.requireNonNull(request, "request must not be null");
+        Objects.requireNonNull(timeoutPolicy, "timeoutPolicy must not be null");
         StreamingModelInvocationScope.InvocationObservation observation =
                 Objects.requireNonNull(
                         observationSupplier.get(),
@@ -114,11 +134,19 @@ public final class OpenAiCompatibleStreamingAgentModelAdapter implements AgentMo
                     client.stream(requestFactory.create(request)),
                     "streaming client returned null"
             );
-            events.doOnNext(event -> accumulator.accept(event, deltaObservation::observe))
+            events.timeout(
+                            timeoutPolicy.idleTimeout(),
+                            Flux.error(timeout("stream idle timeout"))
+                    )
+                    .doOnNext(event -> accumulator.accept(event, deltaObservation::observe))
                     .then()
+                    .timeout(
+                            timeoutPolicy.invocationTimeout(),
+                            Mono.error(timeout("invocation timeout"))
+                    )
                     .block();
             return accumulator.complete();
-        } catch (SpringAiModelAdapterException exception) {
+        } catch (ModelProviderException exception) {
             throw exception;
         } catch (RuntimeException exception) {
             throw new SpringAiModelAdapterException(
@@ -126,6 +154,13 @@ public final class OpenAiCompatibleStreamingAgentModelAdapter implements AgentMo
                     exception
             );
         }
+    }
+
+    private SpringAiModelAdapterException timeout(String detail) {
+        return new SpringAiModelAdapterException(
+                ModelFailureKind.TIMEOUT,
+                options.providerName() + " " + detail
+        );
     }
 
     private final class SafeDeltaObservation {

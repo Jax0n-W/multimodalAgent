@@ -6,6 +6,7 @@ import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
 import org.springframework.ai.openai.api.OpenAiApi;
 
 import java.util.List;
@@ -56,10 +57,11 @@ final class StreamingTurnAccumulator {
         if (finishReason == null) {
             throw failure("ended without a finish reason");
         }
-        TokenUsage completedUsage = usageProvided ? usage : TokenUsage.ZERO;
+        TokenUsage completedUsage = usageProvided ? usage : TokenUsage.UNKNOWN;
         return switch (finishReason) {
             case STOP -> stopTurn(completedUsage);
             case TOOL_CALL, TOOL_CALLS -> toolCallTurn(completedUsage);
+            case LENGTH -> lengthTurn(completedUsage);
             default -> throw failure("used unsupported finish reason " + finishReason);
         };
     }
@@ -118,6 +120,15 @@ final class StreamingTurnAccumulator {
         );
     }
 
+    private ModelTurn lengthTurn(TokenUsage completedUsage) {
+        return new ModelTurn(
+                ModelFinishReason.LENGTH,
+                text.toString(),
+                List.of(),
+                completedUsage
+        );
+    }
+
     private ModelTurn toolCallTurn(TokenUsage completedUsage) {
         List<ToolCall> completedCalls = toolCalls.assemble(objectMapper, providerName);
         if (completedCalls.isEmpty()) {
@@ -141,13 +152,16 @@ final class StreamingTurnAccumulator {
         Integer promptTokens = providerUsage.promptTokens();
         Integer completionTokens = providerUsage.completionTokens();
         if (promptTokens == null || completionTokens == null) {
-            throw failure("returned incomplete token usage");
+            usage = TokenUsage.UNKNOWN;
+            usageProvided = true;
+            return;
         }
         try {
             usage = new TokenUsage(promptTokens.longValue(), completionTokens.longValue());
             usageProvided = true;
         } catch (IllegalArgumentException exception) {
             throw new SpringAiModelAdapterException(
+                    ModelFailureKind.MALFORMED_RESPONSE,
                     providerName + " returned invalid token usage",
                     exception
             );
@@ -156,6 +170,7 @@ final class StreamingTurnAccumulator {
 
     private SpringAiModelAdapterException failure(String detail) {
         return new SpringAiModelAdapterException(
+                ModelFailureKind.MALFORMED_RESPONSE,
                 providerName + " streaming response was incomplete or invalid: " + detail
         );
     }

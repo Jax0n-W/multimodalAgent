@@ -131,7 +131,8 @@ class SpringAiOpenAiAgentModelAdapterTest {
                 turn.toolCalls().stream().map(ToolCall::name).toList());
         assertEquals("A", turn.toolCalls().get(0).arguments().get("query"));
         assertEquals(2, turn.toolCalls().get(1).arguments().get("topK"));
-        assertEquals(TokenUsage.ZERO, turn.tokenUsage());
+        assertEquals(TokenUsage.UNKNOWN, turn.tokenUsage());
+        assertFalse(turn.tokenUsage().isComplete());
     }
 
     @Test

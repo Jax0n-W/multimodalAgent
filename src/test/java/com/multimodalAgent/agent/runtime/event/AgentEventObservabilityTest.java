@@ -9,6 +9,12 @@ import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelGateway;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelProviderException;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationTelemetrySink;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelTimeoutPolicy;
 import com.multimodalAgent.agent.runtime.support.ScriptedAgentModel;
 import com.multimodalAgent.agent.runtime.support.TestModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
@@ -30,6 +36,7 @@ import jakarta.validation.Validator;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -80,6 +87,38 @@ class AgentEventObservabilityTest {
         assertEquals(0, trace.toolCallCount());
         assertEquals(AgentStopReason.COMPLETED, trace.stopReason());
         assertFalse(trace.waitingApproval());
+    }
+
+    @Test
+    void shouldStopAtModelOutputLimitWithoutCompletingOrExecutingTools() {
+        CountingKnowledgeSearchTool tool = new CountingKnowledgeSearchTool();
+        Observation observation = observe(
+                new ScriptedAgentModel(ModelTurn.outputLimit("partial answer")),
+                List.of(tool),
+                Set.of("knowledge_search"),
+                Set.of(),
+                3
+        );
+
+        assertEquals(AgentStopReason.MODEL_OUTPUT_LIMIT, observation.result().stopReason());
+        assertEquals("partial answer", observation.result().finalContent());
+        assertEquals(0, tool.executionCount());
+        assertTypes(observation.events(),
+                AgentEventType.RUN_STARTED,
+                AgentEventType.MODEL_STARTED,
+                AgentEventType.MODEL_COMPLETED,
+                AgentEventType.RUN_STOPPED
+        );
+        ModelCompletedEvent completed = (ModelCompletedEvent) observation.events().get(2);
+        assertEquals(
+                com.multimodalAgent.agent.runtime.model.ModelFinishReason.LENGTH,
+                completed.finishReason()
+        );
+        assertEquals(0, completed.toolCallCount());
+        assertNoEvent(observation.events(), AgentEventType.MODEL_FAILED,
+                AgentEventType.TOOL_REQUESTED, AgentEventType.TOOL_STARTED,
+                AgentEventType.RUN_COMPLETED);
+        assertEquals(AgentStopReason.MODEL_OUTPUT_LIMIT, trace(observation).stopReason());
     }
 
     @Test
@@ -330,6 +369,75 @@ class AgentEventObservabilityTest {
         DecisionTrace trace = trace(observation);
         assertEquals(1, trace.errors().size());
         assertEquals("MODEL_ERROR", trace.errors().get(0).errorCode());
+    }
+
+    @Test
+    void shouldClassifyGatewayTimeoutWithoutStartingAnyTool() {
+        AgentModel provider = messages -> {
+            throw new ModelProviderException(ModelFailureKind.TIMEOUT, "provider deadline");
+        };
+        ModelGateway gateway = new ModelGateway(
+                provider,
+                new ModelIdentity("test-provider", "test-model"),
+                new ModelTimeoutPolicy(Duration.ofSeconds(2), Duration.ofSeconds(1)),
+                ModelInvocationTelemetrySink.NOOP
+        );
+
+        Observation observation = observe(
+                gateway,
+                List.of(new CountingKnowledgeSearchTool()),
+                Set.of("knowledge_search"),
+                Set.of(),
+                3
+        );
+
+        assertTypes(observation.events(),
+                AgentEventType.RUN_STARTED,
+                AgentEventType.MODEL_STARTED,
+                AgentEventType.MODEL_FAILED,
+                AgentEventType.RUN_STOPPED
+        );
+        assertEquals(AgentStopReason.MODEL_TIMEOUT, observation.result().stopReason());
+        assertEquals(
+                AgentStopReason.MODEL_TIMEOUT,
+                ((ModelFailedEvent) observation.events().get(2)).stopReason()
+        );
+        assertNoEvent(observation.events(), AgentEventType.MODEL_COMPLETED,
+                AgentEventType.TOOL_REQUESTED, AgentEventType.TOOL_STARTED,
+                AgentEventType.RUN_COMPLETED);
+        DecisionTrace trace = trace(observation);
+        assertEquals(AgentStopReason.MODEL_TIMEOUT, trace.stopReason());
+        assertEquals("MODEL_TIMEOUT", trace.errors().get(0).errorCode());
+    }
+
+    @Test
+    void shouldClassifyMalformedProviderResponseAsModelError() {
+        AgentModel provider = messages -> {
+            throw new ModelProviderException(
+                    ModelFailureKind.MALFORMED_RESPONSE,
+                    "provider response violated the adapter contract"
+            );
+        };
+        ModelGateway gateway = new ModelGateway(
+                provider,
+                new ModelIdentity("test-provider", "test-model"),
+                new ModelTimeoutPolicy(Duration.ofSeconds(2), Duration.ofSeconds(1)),
+                ModelInvocationTelemetrySink.NOOP
+        );
+
+        Observation observation = observe(gateway, List.of(), Set.of(), Set.of(), 3);
+
+        assertEquals(AgentStopReason.MODEL_ERROR, observation.result().stopReason());
+        assertTypes(observation.events(),
+                AgentEventType.RUN_STARTED,
+                AgentEventType.MODEL_STARTED,
+                AgentEventType.MODEL_FAILED,
+                AgentEventType.RUN_STOPPED
+        );
+        assertEquals(
+                AgentStopReason.MODEL_ERROR,
+                ((ModelFailedEvent) observation.events().get(2)).stopReason()
+        );
     }
 
     @Test

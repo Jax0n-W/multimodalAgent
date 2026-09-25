@@ -15,17 +15,29 @@ import com.multimodalAgent.agent.runtime.model.AgentModelRequest;
 import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
 import com.multimodalAgent.agent.runtime.model.ModelToolDefinition;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
+import com.multimodalAgent.agent.runtime.model.TokenUsageStatus;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelGateway;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationTelemetrySink;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelProviderException;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelTimeoutPolicy;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
+import com.multimodalAgent.agent.runtime.tool.AgentTool;
+import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
+import com.multimodalAgent.agent.runtime.tool.ToolRisk;
 import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
+import com.multimodalAgent.agent.tool.builtin.KnowledgeSearchInput;
 import com.multimodalAgent.agent.stream.ModelDelta;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.openai.api.OpenAiApi;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +45,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -255,8 +271,143 @@ class OpenAiCompatibleStreamingAgentModelAdapterTest {
         assertEquals(1, publisher.events().stream()
                 .filter(event -> event.type() == AgentEventType.MODEL_COMPLETED)
                 .count());
+        assertEquals(
+                TokenUsageStatus.UNKNOWN_OR_INCOMPLETE,
+                publisher.events().stream()
+                        .filter(event -> event.type() == AgentEventType.MODEL_COMPLETED)
+                        .map(event -> (com.multimodalAgent.agent.runtime.event.ModelCompletedEvent) event)
+                        .findFirst()
+                        .orElseThrow()
+                        .tokenUsageStatus()
+        );
         assertFalse(publisher.events().stream()
                 .anyMatch(event -> event.type() == AgentEventType.MODEL_FAILED));
+    }
+
+    @Test
+    void idleTimeoutIsTypedAndNeverReturnsAnIncompleteToolCall() throws Exception {
+        CountDownLatch subscribed = new CountDownLatch(1);
+        OpenAiCompatibleStreamingAgentModelAdapter adapter = adapter(
+                ignored -> Flux.concat(
+                        Flux.just(toolChunk(
+                                fragment(0, "call-partial", "lookup", "{\"query\":"),
+                                null
+                        )),
+                        Flux.defer(() -> {
+                            subscribed.countDown();
+                            return Flux.never();
+                        })
+                ),
+                delta -> { },
+                () -> 1
+        );
+        CompletableFuture<ModelTurn> invocation = CompletableFuture.supplyAsync(
+                () -> adapter.generate(request(), new ModelTimeoutPolicy(
+                        Duration.ofSeconds(2), Duration.ofMillis(50)
+                ))
+        );
+        assertTrue(subscribed.await(5, TimeUnit.SECONDS));
+
+        CompletionException failure = assertThrows(
+                CompletionException.class,
+                invocation::join
+        );
+        assertTrue(failure.getCause() instanceof ModelProviderException);
+        assertEquals(
+                ModelFailureKind.TIMEOUT,
+                ((ModelProviderException) failure.getCause()).failureKind()
+        );
+        assertTrue(failure.getCause().getMessage().contains("idle timeout"));
+    }
+
+    @Test
+    void invocationTimeoutWinsWhileChunksKeepTheStreamNonIdle() throws Exception {
+        CountDownLatch subscribed = new CountDownLatch(1);
+        OpenAiCompatibleStreamingAgentModelAdapter adapter = adapter(
+                ignored -> Flux.defer(() -> {
+                    subscribed.countDown();
+                    return Flux.interval(Duration.ZERO, Duration.ofMillis(20))
+                            .map(index -> textChunk("x", null));
+                }),
+                delta -> { },
+                () -> 1
+        );
+        CompletableFuture<ModelTurn> invocation = CompletableFuture.supplyAsync(
+                () -> adapter.generate(request(), new ModelTimeoutPolicy(
+                        Duration.ofMillis(300), Duration.ofMillis(250)
+                ))
+        );
+        assertTrue(subscribed.await(5, TimeUnit.SECONDS));
+
+        CompletionException failure = assertThrows(
+                CompletionException.class,
+                invocation::join
+        );
+        assertTrue(failure.getCause() instanceof ModelProviderException);
+        assertEquals(
+                ModelFailureKind.TIMEOUT,
+                ((ModelProviderException) failure.getCause()).failureKind()
+        );
+        assertTrue(failure.getCause().getMessage().contains("invocation timeout"));
+    }
+
+    @Test
+    void idleTimeoutCannotExposeAPartialToolCallToToolExecutor() {
+        OpenAiCompatibleStreamingAgentModelAdapter adapter = adapter(
+                ignored -> Flux.concat(
+                        Flux.just(toolChunk(
+                                fragment(0, "call-partial", "lookup", "{\"query\":"),
+                                null
+                        )),
+                        Flux.never()
+                ),
+                delta -> { },
+                () -> 1
+        );
+        ModelGateway gateway = new ModelGateway(
+                adapter,
+                new ModelIdentity("test-provider", "test-model"),
+                new ModelTimeoutPolicy(Duration.ofSeconds(2), Duration.ofMillis(50)),
+                ModelInvocationTelemetrySink.NOOP
+        );
+        AtomicInteger executions = new AtomicInteger();
+        AgentTool<KnowledgeSearchInput, String> tool = new AgentTool<>() {
+            private final ToolDescriptor<KnowledgeSearchInput> descriptor =
+                    new ToolDescriptor<>(
+                            "lookup", "lookup", KnowledgeSearchInput.class,
+                            ToolRisk.LOW, true, true, false
+                    );
+
+            @Override
+            public ToolDescriptor<KnowledgeSearchInput> descriptor() {
+                return descriptor;
+            }
+
+            @Override
+            public String execute(KnowledgeSearchInput input) {
+                executions.incrementAndGet();
+                return "unexpected";
+            }
+        };
+        RecordingAgentEventPublisher publisher = new RecordingAgentEventPublisher();
+        AgentRunner runner = new AgentRunner(
+                gateway,
+                toolExecutor(List.of(tool)),
+                descriptor -> new ModelToolDefinition(
+                        descriptor.name(), descriptor.description(), schema()
+                ),
+                publisher
+        );
+        AgentRunResult result = runner.run(new AgentRunSpec(
+                "run-partial-timeout", "session-partial-timeout",
+                List.of(AgentMessage.user("lookup")), 1, Set.of("lookup"), Set.of()
+        ));
+
+        assertEquals(AgentStopReason.MODEL_TIMEOUT, result.stopReason());
+        assertEquals(0, executions.get());
+        assertFalse(publisher.events().stream().anyMatch(event ->
+                event.type() == AgentEventType.TOOL_REQUESTED
+                        || event.type() == AgentEventType.TOOL_STARTED));
     }
 
     private OpenAiCompatibleStreamingAgentModelAdapter adapter(
@@ -278,8 +429,12 @@ class OpenAiCompatibleStreamingAgentModelAdapterTest {
     }
 
     private ToolExecutor emptyToolExecutor() {
+        return toolExecutor(List.of());
+    }
+
+    private ToolExecutor toolExecutor(List<? extends AgentTool<?, ?>> tools) {
         return new ToolExecutor(
-                new ToolRegistry(List.of()),
+                new ToolRegistry(tools),
                 new ToolArgumentResolver(
                         objectMapper,
                         Validation.buildDefaultValidatorFactory().getValidator()

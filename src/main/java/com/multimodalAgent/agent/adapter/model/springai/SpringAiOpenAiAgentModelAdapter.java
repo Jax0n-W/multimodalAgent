@@ -11,6 +11,7 @@ import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.metadata.EmptyUsage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -187,19 +188,21 @@ abstract class AbstractSpringAiChatModelAgentAdapter implements AgentModel {
 
     private TokenUsage tokenUsage(ChatResponse response) {
         Usage usage = response.getMetadata() == null ? null : response.getMetadata().getUsage();
-        if (usage == null) {
-            return TokenUsage.ZERO;
+        if (usage == null || usage instanceof EmptyUsage) {
+            return TokenUsage.UNKNOWN;
+        }
+        Integer promptTokens = usage.getPromptTokens();
+        Integer completionTokens = usage.getCompletionTokens();
+        if (promptTokens == null || completionTokens == null) {
+            return TokenUsage.UNKNOWN;
         }
         return new TokenUsage(
-                nonNegativeOrZero(usage.getPromptTokens()),
-                nonNegativeOrZero(usage.getCompletionTokens())
+                nonNegative(promptTokens),
+                nonNegative(completionTokens)
         );
     }
 
-    private long nonNegativeOrZero(Integer value) {
-        if (value == null) {
-            return 0;
-        }
+    private long nonNegative(Integer value) {
         if (value < 0) {
             throw new SpringAiModelAdapterException(providerName + " returned negative token usage");
         }

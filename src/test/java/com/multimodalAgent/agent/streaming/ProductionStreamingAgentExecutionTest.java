@@ -12,6 +12,8 @@ import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.runtime.event.AgentEventType;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
+import com.multimodalAgent.agent.runtime.model.AgentModel;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelGateway;
 import com.multimodalAgent.agent.stream.ExecutionStreamEvent;
 import com.multimodalAgent.agent.stream.ExecutionStreamEventKind;
 import com.multimodalAgent.agent.stream.ModelDelta;
@@ -65,6 +67,9 @@ class ProductionStreamingAgentExecutionTest {
     @Autowired
     private StreamingAgentExecutionService execution;
 
+    @Autowired
+    private AgentModel productionModel;
+
     @SpyBean
     private ExecutionStreamHub hub;
 
@@ -82,6 +87,15 @@ class ProductionStreamingAgentExecutionTest {
 
     @MockBean
     private OpenAiCompatibleStreamingClient provider;
+
+    @Test
+    void productionCompositionRoutesModelCallsThroughGateway() {
+        assertTrue(productionModel instanceof ModelGateway);
+        ModelGateway gateway = (ModelGateway) productionModel;
+        assertEquals("ollama", gateway.identity().provider());
+        assertTrue(gateway.timeoutPolicy().invocationTimeout()
+                .compareTo(gateway.timeoutPolicy().idleTimeout()) >= 0);
+    }
 
     @Test
     void authenticatedHttpEntryExecutesTheProductionComposition() {

@@ -188,6 +188,7 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
                 run,
                 event.iteration(),
                 event.finishReason() == ModelFinishReason.STOP
+                        || event.finishReason() == ModelFinishReason.LENGTH
                         ? AgentRunPhase.FINALIZING
                         : AgentRunPhase.AWAITING_TOOL
         );

@@ -22,6 +22,10 @@ import com.multimodalAgent.agent.runtime.event.AgentEventPublisher;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddleware;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelGateway;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationTelemetrySink;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelTimeoutPolicy;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
@@ -80,17 +84,18 @@ public class StreamingAgentExecutionConfiguration {
     }
 
     @Bean
-    public AgentModel agentStreamingModel(
+    public ModelGateway agentStreamingModel(
             OpenAiCompatibleStreamingClient client,
             multimodalAgentProperties properties,
             ObjectMapper objectMapper,
-            StreamingModelInvocationScope invocationScope
+            StreamingModelInvocationScope invocationScope,
+            ObjectProvider<ModelInvocationTelemetrySink> telemetryProvider
     ) {
         String provider = properties.getAi().getProvider().toLowerCase(Locale.ROOT);
         String modelName = "ollama".equals(provider)
                 ? properties.getAi().getOllama().getModel()
                 : properties.getAi().getOpenai().getModel();
-        return new OpenAiCompatibleStreamingAgentModelAdapter(
+        AgentModel adapter = new OpenAiCompatibleStreamingAgentModelAdapter(
                 client,
                 new OpenAiCompatibleStreamingOptions(
                         provider,
@@ -100,6 +105,15 @@ public class StreamingAgentExecutionConfiguration {
                 ),
                 objectMapper,
                 invocationScope
+        );
+        return new ModelGateway(
+                adapter,
+                new ModelIdentity(provider, modelName),
+                new ModelTimeoutPolicy(
+                        properties.getAi().getInvocationTimeout(),
+                        properties.getAi().getIdleTimeout()
+                ),
+                telemetryProvider.getIfAvailable(() -> ModelInvocationTelemetrySink.NOOP)
         );
     }
 

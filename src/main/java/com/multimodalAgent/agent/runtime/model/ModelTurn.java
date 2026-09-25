@@ -17,10 +17,14 @@ public record ModelTurn(
         Objects.requireNonNull(finishReason, "finishReason must not be null");
         content = content == null ? "" : content;
         toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
-        tokenUsage = tokenUsage == null ? TokenUsage.ZERO : tokenUsage;
+        tokenUsage = tokenUsage == null ? TokenUsage.UNKNOWN : tokenUsage;
 
-        if (finishReason == ModelFinishReason.STOP && !toolCalls.isEmpty()) {
-            throw new IllegalArgumentException("A final model turn must not contain tool calls");
+        if ((finishReason == ModelFinishReason.STOP
+                || finishReason == ModelFinishReason.LENGTH)
+                && !toolCalls.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "A terminal text model turn must not contain tool calls"
+            );
         }
         if (finishReason == ModelFinishReason.TOOL_CALLS && toolCalls.isEmpty()) {
             throw new IllegalArgumentException("A tool-call model turn must contain at least one call");
@@ -35,6 +39,15 @@ public record ModelTurn(
 
     public static ModelTurn finalAnswer(String content) {
         return new ModelTurn(ModelFinishReason.STOP, content, List.of(), TokenUsage.ZERO);
+    }
+
+    public static ModelTurn outputLimit(String partialContent) {
+        return new ModelTurn(
+                ModelFinishReason.LENGTH,
+                partialContent,
+                List.of(),
+                TokenUsage.ZERO
+        );
     }
 
     public static ModelTurn toolCall(ToolCall... toolCalls) {

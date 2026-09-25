@@ -27,6 +27,9 @@ import com.multimodalAgent.agent.runtime.model.ModelToolDefinitionProjector;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
+import com.multimodalAgent.agent.runtime.model.gateway.GovernedAgentModel;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationException;
 import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolResult;
@@ -142,9 +145,10 @@ public final class AgentRunner {
                         exception
                 );
             } catch (RuntimeException exception) {
+                AgentStopReason modelStopReason = modelStopReason(exception);
                 RuntimeCancellation.sealCoreTerminal(runtimeContext);
                 AgentRunResult result = stopped(
-                        AgentStopReason.MODEL_ERROR,
+                        modelStopReason,
                         iteration,
                         toolsUsed,
                         messages,
@@ -157,7 +161,7 @@ public final class AgentRunner {
                         iteration,
                         metadata -> new RunStoppedEvent(
                                 metadata,
-                                AgentStopReason.MODEL_ERROR,
+                                modelStopReason,
                                 null
                         )
                 );
@@ -191,6 +195,30 @@ public final class AgentRunner {
                         null
                 );
                 eventEmitter.emit(iteration, RunCompletedEvent::new);
+                return result;
+            }
+            if (turn.finishReason() == ModelFinishReason.LENGTH) {
+                RuntimeCancellation.sealCoreTerminal(runtimeContext);
+                messages.add(AgentMessage.assistant(turn.content()));
+                AgentRunResult result = new AgentRunResult(
+                        turn.content(),
+                        AgentStopReason.MODEL_OUTPUT_LIMIT,
+                        iteration,
+                        List.copyOf(toolsUsed),
+                        messages,
+                        totalUsage,
+                        null,
+                        null,
+                        "Model output limit reached"
+                );
+                eventEmitter.emit(
+                        iteration,
+                        metadata -> new RunStoppedEvent(
+                                metadata,
+                                AgentStopReason.MODEL_OUTPUT_LIMIT,
+                                null
+                        )
+                );
                 return result;
             }
 
@@ -351,10 +379,9 @@ public final class AgentRunner {
         eventEmitter.emit(iteration, ModelStartedEvent::new);
         try {
             ModelTurn turn = Objects.requireNonNull(
-                    model.generate(new AgentModelRequest(
-                            messages,
-                            visibleToolDefinitions(allowedTools)
-                    )),
+                    generateModelTurn(new AgentModelRequest(
+                            messages, visibleToolDefinitions(allowedTools)
+                    ), iteration),
                     "model returned a null turn"
             );
             validateUniqueToolCallIds(turn, seenToolCallIds);
@@ -366,18 +393,33 @@ public final class AgentRunner {
                             turn.toolCalls().size(),
                             turn.tokenUsage().inputTokens(),
                             turn.tokenUsage().outputTokens(),
-                            turn.tokenUsage().totalTokens()
+                            turn.tokenUsage().totalTokens(),
+                            turn.tokenUsage().status()
                     )
             );
             invocationState.completedTurn = turn;
             return turn;
         } catch (RuntimeException exception) {
+            AgentStopReason stopReason = modelStopReason(exception);
             eventEmitter.emit(
                     iteration,
-                    metadata -> new ModelFailedEvent(metadata, AgentStopReason.MODEL_ERROR)
+                    metadata -> new ModelFailedEvent(metadata, stopReason)
             );
             throw exception;
         }
+    }
+
+    private ModelTurn generateModelTurn(AgentModelRequest request, int iteration) {
+        return model instanceof GovernedAgentModel governed
+                ? governed.generate(request, iteration)
+                : model.generate(request);
+    }
+
+    private AgentStopReason modelStopReason(RuntimeException exception) {
+        return exception instanceof ModelInvocationException invocation
+                && invocation.failureKind() == ModelFailureKind.TIMEOUT
+                ? AgentStopReason.MODEL_TIMEOUT
+                : AgentStopReason.MODEL_ERROR;
     }
 
     private List<ModelToolDefinition> visibleToolDefinitions(Set<String> allowedTools) {

@@ -2,6 +2,7 @@ package com.multimodalAgent.agent.config;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "multimodal-agent")
@@ -51,6 +52,8 @@ public class multimodalAgentProperties {
         private double temperature = 0.35;
         /** 学生端单次回复的最大生成 token 数，避免本地模型无边界扩写。 */
         private int maxTokens = 512;
+        private Duration invocationTimeout = Duration.ofMinutes(2);
+        private Duration idleTimeout = Duration.ofSeconds(30);
         private final Ollama ollama = new Ollama();
         private final OpenAi openai = new OpenAi();
 
@@ -72,6 +75,22 @@ public class multimodalAgentProperties {
 
         public int getMaxTokens() {
             return maxTokens;
+        }
+
+        public Duration getInvocationTimeout() {
+            return invocationTimeout;
+        }
+
+        public void setInvocationTimeout(Duration invocationTimeout) {
+            this.invocationTimeout = invocationTimeout;
+        }
+
+        public Duration getIdleTimeout() {
+            return idleTimeout;
+        }
+
+        public void setIdleTimeout(Duration idleTimeout) {
+            this.idleTimeout = idleTimeout;
         }
 
         public void setMaxTokens(int maxTokens) {

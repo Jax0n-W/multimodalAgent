@@ -1,6 +1,7 @@
 package com.multimodalAgent.agent.coordination.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 import java.time.Duration;
@@ -27,6 +28,7 @@ public record RedisCoordinationProperties(
         this(enabled, keyPrefix, leaseTtl, renewInterval, 4);
     }
 
+    @ConstructorBinding
     public RedisCoordinationProperties {
         if (keyPrefix == null || keyPrefix.isBlank()) {
             throw new IllegalArgumentException("keyPrefix must not be blank");

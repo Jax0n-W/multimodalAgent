@@ -1,12 +1,27 @@
 package com.multimodalAgent.agent.adapter.model.springai;
 
-public final class SpringAiModelAdapterException extends RuntimeException {
+import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelProviderException;
+
+public class SpringAiModelAdapterException extends ModelProviderException {
 
     public SpringAiModelAdapterException(String message) {
-        super(message);
+        this(ModelFailureKind.PROVIDER_ERROR, message);
     }
 
     public SpringAiModelAdapterException(String message, Throwable cause) {
-        super(message, cause);
+        this(ModelFailureKind.PROVIDER_ERROR, message, cause);
+    }
+
+    public SpringAiModelAdapterException(ModelFailureKind kind, String message) {
+        super(kind, message);
+    }
+
+    public SpringAiModelAdapterException(
+            ModelFailureKind kind,
+            String message,
+            Throwable cause
+    ) {
+        super(kind, message, cause);
     }
 }

@@ -85,9 +85,12 @@ public final class DecisionTraceBuilder {
                 iterations = Math.max(iterations, event.iteration());
             } else if (event instanceof ModelCompletedEvent completed) {
                 modelLifecycle.complete(event.iteration());
-                if (completed.finishReason() == ModelFinishReason.STOP
+                if ((completed.finishReason() == ModelFinishReason.STOP
+                        || completed.finishReason() == ModelFinishReason.LENGTH)
                         && completed.toolCallCount() != 0) {
-                    throw new IllegalArgumentException("A STOP model completion cannot declare tool calls");
+                    throw new IllegalArgumentException(
+                            "A terminal text model completion cannot declare tool calls"
+                    );
                 }
                 modelCompletions.put(
                         event.iteration(),
@@ -377,9 +380,15 @@ public final class DecisionTraceBuilder {
 
         RunStoppedEvent stopped = (RunStoppedEvent) terminal;
         switch (stopped.stopReason()) {
-            case MODEL_ERROR -> {
+            case MODEL_ERROR, MODEL_TIMEOUT -> {
                 requireCause(cause instanceof ModelFailedEvent,
-                        "MODEL_ERROR requires MODEL_FAILED");
+                        stopped.stopReason() + " requires MODEL_FAILED");
+                requireSameIteration(terminal, cause);
+            }
+            case MODEL_OUTPUT_LIMIT -> {
+                requireCause(cause instanceof ModelCompletedEvent completed
+                                && completed.finishReason() == ModelFinishReason.LENGTH,
+                        "MODEL_OUTPUT_LIMIT requires a LENGTH model completion");
                 requireSameIteration(terminal, cause);
             }
             case TOOL_ERROR -> {

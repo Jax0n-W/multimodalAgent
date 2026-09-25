@@ -96,7 +96,8 @@ class StreamingTurnAccumulatorTest {
         ModelTurn turn = accumulator.complete();
 
         assertFalse(accumulator.usageProvided());
-        assertEquals(TokenUsage.ZERO, turn.tokenUsage());
+        assertEquals(TokenUsage.UNKNOWN, turn.tokenUsage());
+        assertFalse(turn.tokenUsage().isComplete());
     }
 
     @Test
@@ -123,14 +124,43 @@ class StreamingTurnAccumulatorTest {
     }
 
     @Test
-    void unsupportedFinishReasonFailsClosed() {
+    void lengthPreservesPartialTextAsAnOutputLimitTurn() {
         StreamingTurnAccumulator accumulator = accumulator();
         accumulator.accept(chunk("partial", OpenAiApi.ChatCompletionFinishReason.LENGTH), ignored -> {
         });
         accumulator.accept(OpenAiStreamEvent.Done.INSTANCE, ignored -> {
         });
 
-        assertThrows(SpringAiModelAdapterException.class, accumulator::complete);
+        ModelTurn turn = accumulator.complete();
+
+        assertEquals(ModelFinishReason.LENGTH, turn.finishReason());
+        assertEquals("partial", turn.content());
+        assertTrue(turn.toolCalls().isEmpty());
+    }
+
+    @Test
+    void lengthDiscardsPartialToolCallFragmentsInsteadOfExposingThem() {
+        StreamingTurnAccumulator accumulator = accumulator();
+        accumulator.accept(toolChunk(
+                new OpenAiApi.ChatCompletionMessage.ToolCall(
+                        0,
+                        "call-partial",
+                        "function",
+                        new OpenAiApi.ChatCompletionMessage.ChatCompletionFunction(
+                                "dangerous_write",
+                                "{\"value\":"
+                        )
+                ),
+                OpenAiApi.ChatCompletionFinishReason.LENGTH
+        ), ignored -> {
+        });
+        accumulator.accept(OpenAiStreamEvent.Done.INSTANCE, ignored -> {
+        });
+
+        ModelTurn turn = accumulator.complete();
+
+        assertEquals(ModelFinishReason.LENGTH, turn.finishReason());
+        assertTrue(turn.toolCalls().isEmpty());
     }
 
     private StreamingTurnAccumulator accumulator() {
@@ -178,6 +208,39 @@ class StreamingTurnAccumulatorTest {
                         promptTokens,
                         promptTokens + completionTokens
                 )
+        ));
+    }
+
+    private OpenAiStreamEvent toolChunk(
+            OpenAiApi.ChatCompletionMessage.ToolCall fragment,
+            OpenAiApi.ChatCompletionFinishReason finishReason
+    ) {
+        OpenAiApi.ChatCompletionMessage delta = new OpenAiApi.ChatCompletionMessage(
+                null,
+                OpenAiApi.ChatCompletionMessage.Role.ASSISTANT,
+                null,
+                null,
+                List.of(fragment),
+                null,
+                null,
+                null
+        );
+        OpenAiApi.ChatCompletionChunk.ChunkChoice choice =
+                new OpenAiApi.ChatCompletionChunk.ChunkChoice(
+                        finishReason,
+                        0,
+                        delta,
+                        null
+                );
+        return new OpenAiStreamEvent.Chunk(new OpenAiApi.ChatCompletionChunk(
+                "response-1",
+                List.of(choice),
+                1L,
+                "test-model",
+                null,
+                null,
+                "chat.completion.chunk",
+                null
         ));
     }
 }
