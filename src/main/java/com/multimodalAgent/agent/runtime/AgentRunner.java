@@ -1,10 +1,16 @@
 package com.multimodalAgent.agent.runtime;
 
+import com.multimodalAgent.agent.runtime.budget.BudgetBlock;
+import com.multimodalAgent.agent.runtime.budget.BudgetBlockedException;
+import com.multimodalAgent.agent.runtime.budget.BudgetBlockReason;
+import com.multimodalAgent.agent.runtime.budget.BudgetRuntimeAttributes;
+import com.multimodalAgent.agent.runtime.budget.BudgetSession;
 import com.multimodalAgent.agent.runtime.control.ExecutionCancelledException;
 import com.multimodalAgent.agent.runtime.control.ExecutionCheckpoint;
 import com.multimodalAgent.agent.runtime.control.RuntimeCancellation;
 import com.multimodalAgent.agent.runtime.event.AgentEventEmitter;
 import com.multimodalAgent.agent.runtime.event.AgentEventPublisher;
+import com.multimodalAgent.agent.runtime.event.BudgetBlockedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelCompletedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelFailedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelStartedEvent;
@@ -28,6 +34,7 @@ import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
 import com.multimodalAgent.agent.runtime.model.gateway.GovernedAgentModel;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationException;
 import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
@@ -40,6 +47,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 public final class AgentRunner {
@@ -95,18 +103,20 @@ public final class AgentRunner {
         }
         AgentEventEmitter eventEmitter = new AgentEventEmitter(spec.runId(), eventPublisher);
         eventEmitter.emit(0, RunStartedEvent::new);
-        List<AgentMessage> messages = new ArrayList<>(spec.messages());
-        Set<String> toolsUsed = new LinkedHashSet<>();
-        Set<String> seenToolCallIds = new LinkedHashSet<>();
-        TokenUsage totalUsage = TokenUsage.ZERO;
-        ToolPolicyContext policyContext = new ToolPolicyContext(
-                spec.runId(),
-                spec.sessionId(),
-                spec.allowedTools(),
-                spec.approvedToolCallIds()
-        );
+        BudgetSession budgetSession = new BudgetSession(spec.budget(), modelIdentity());
+        try {
+            List<AgentMessage> messages = new ArrayList<>(spec.messages());
+            Set<String> toolsUsed = new LinkedHashSet<>();
+            Set<String> seenToolCallIds = new LinkedHashSet<>();
+            TokenUsage totalUsage = TokenUsage.ZERO;
+            ToolPolicyContext policyContext = new ToolPolicyContext(
+                    spec.runId(),
+                    spec.sessionId(),
+                    spec.allowedTools(),
+                    spec.approvedToolCallIds()
+            );
 
-        for (int iteration = 1; iteration <= spec.maxIterations(); iteration++) {
+            for (int iteration = 1; iteration <= spec.maxIterations(); iteration++) {
             if (RuntimeCancellation.requested(runtimeContext, ExecutionCheckpoint.BEFORE_MODEL)) {
                 return cancelled(
                         runtimeContext, iteration - 1, iteration,
@@ -120,14 +130,20 @@ public final class AgentRunner {
                 turn = middlewareChain.aroundModelCall(
                         runtimeContext,
                         new ModelCallMetadata(currentIteration, messages.size()),
-                        () -> invokeModel(
+                        () -> invokeBudgetedModel(
                                 messages,
                                 eventEmitter,
                                 currentIteration,
                                 invocationState,
                                 seenToolCallIds,
-                                spec.allowedTools()
+                                spec.allowedTools(),
+                                budgetSession
                         )
+                );
+            } catch (BudgetBlockedException exception) {
+                return stopForBudget(
+                        runtimeContext, iteration - 1, toolsUsed, messages, totalUsage,
+                        eventEmitter, iteration, exception.block()
                 );
             } catch (RuntimeMiddlewareFailureException exception) {
                 TokenUsage usage = invocationState.completedTurn == null
@@ -242,7 +258,8 @@ public final class AgentRunner {
                             eventEmitter,
                             iteration,
                             runtimeContext,
-                            middlewareChain
+                            middlewareChain,
+                            budgetSession
                     );
                 } catch (RuntimeMiddlewareFailureException exception) {
                     return stopForMiddlewareFailure(
@@ -259,6 +276,11 @@ public final class AgentRunner {
                     return cancelled(
                             runtimeContext, iteration, iteration,
                             toolsUsed, messages, totalUsage, eventEmitter
+                    );
+                } catch (BudgetBlockedException exception) {
+                    return stopForBudget(
+                            runtimeContext, iteration, toolsUsed, messages, totalUsage,
+                            eventEmitter, iteration, exception.block()
                     );
                 }
                 if (result.policyBlocked()) {
@@ -338,33 +360,66 @@ public final class AgentRunner {
                     );
                 }
             }
-        }
+            }
 
-        if (!RuntimeCancellation.trySealNormalCompletion(runtimeContext)) {
-            return cancelled(
-                    runtimeContext, spec.maxIterations(), spec.maxIterations(),
-                    toolsUsed, messages, totalUsage, eventEmitter
+            if (!RuntimeCancellation.trySealNormalCompletion(runtimeContext)) {
+                return cancelled(
+                        runtimeContext, spec.maxIterations(), spec.maxIterations(),
+                        toolsUsed, messages, totalUsage, eventEmitter
+                );
+            }
+            AgentRunResult result = stopped(
+                    AgentStopReason.MAX_ITERATIONS,
+                    spec.maxIterations(),
+                    toolsUsed,
+                    messages,
+                    totalUsage,
+                    null,
+                    null,
+                    "Maximum model iterations reached"
             );
+            eventEmitter.emit(
+                    spec.maxIterations(),
+                    metadata -> new RunStoppedEvent(
+                            metadata,
+                            AgentStopReason.MAX_ITERATIONS,
+                            null
+                    )
+            );
+            return result;
+        } finally {
+            runtimeContext.attributes().put(BudgetRuntimeAttributes.USAGE, budgetSession.usage());
         }
-        AgentRunResult result = stopped(
-                AgentStopReason.MAX_ITERATIONS,
-                spec.maxIterations(),
-                toolsUsed,
+    }
+
+    private ModelTurn invokeBudgetedModel(
+            List<AgentMessage> messages,
+            AgentEventEmitter eventEmitter,
+            int iteration,
+            ModelInvocationState invocationState,
+            Set<String> seenToolCallIds,
+            Set<String> allowedTools,
+            BudgetSession budgetSession
+    ) {
+        Optional<BudgetBlock> budgetBlock = budgetSession.admitModelCall();
+        if (budgetBlock.isPresent()) {
+            BudgetBlock block = budgetBlock.get();
+            eventEmitter.emit(
+                    iteration,
+                    metadata -> BudgetBlockedEvent.forRun(metadata, block)
+            );
+            throw new BudgetBlockedException(block);
+        }
+        ModelTurn turn = invokeModel(
                 messages,
-                totalUsage,
-                null,
-                null,
-                "Maximum model iterations reached"
+                eventEmitter,
+                iteration,
+                invocationState,
+                seenToolCallIds,
+                allowedTools
         );
-        eventEmitter.emit(
-                spec.maxIterations(),
-                metadata -> new RunStoppedEvent(
-                        metadata,
-                        AgentStopReason.MAX_ITERATIONS,
-                        null
-                )
-        );
-        return result;
+        budgetSession.account(turn.tokenUsage());
+        return turn;
     }
 
     private ModelTurn invokeModel(
@@ -473,6 +528,37 @@ public final class AgentRunner {
         return result;
     }
 
+    private AgentRunResult stopForBudget(
+            AgentRuntimeContext runtimeContext,
+            int completedIterations,
+            Set<String> toolsUsed,
+            List<AgentMessage> messages,
+            TokenUsage tokenUsage,
+            AgentEventEmitter eventEmitter,
+            int eventIteration,
+            BudgetBlock block
+    ) {
+        RuntimeCancellation.sealCoreTerminal(runtimeContext);
+        AgentStopReason stopReason = block.reason() == BudgetBlockReason.EXHAUSTED
+                ? AgentStopReason.BUDGET_EXHAUSTED
+                : AgentStopReason.BUDGET_UNVERIFIABLE;
+        AgentRunResult result = stopped(
+                stopReason,
+                completedIterations,
+                toolsUsed,
+                messages,
+                tokenUsage,
+                null,
+                null,
+                "Execution budget " + block.reason() + ": " + block.dimension()
+        );
+        eventEmitter.emit(
+                eventIteration,
+                metadata -> new RunStoppedEvent(metadata, stopReason, null)
+        );
+        return result;
+    }
+
     private AgentRunResult cancelled(
             AgentRuntimeContext context,
             int completedIterations,
@@ -521,6 +607,12 @@ public final class AgentRunner {
                 policyDecision,
                 errorMessage
         );
+    }
+
+    private Optional<ModelIdentity> modelIdentity() {
+        return model instanceof GovernedAgentModel governed
+                ? governed.modelIdentity()
+                : Optional.empty();
     }
 
     private static final class ModelInvocationState {

@@ -17,6 +17,7 @@ import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
+import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
 import com.multimodalAgent.agent.runtime.event.AgentEvent;
 import com.multimodalAgent.agent.runtime.event.AgentEventType;
 import com.multimodalAgent.agent.runtime.event.AgentEventPublisher;
@@ -338,6 +339,36 @@ class ExecutionPersistenceIntegrationTest {
                 executions.stream().map(ToolExecutionEntity::getToolCallId).toList());
     }
 
+    @Test
+    void shouldPersistBudgetBlockAndTerminalReasonWithoutClaimingToolStart() {
+        CountingTool tool = new CountingTool("budgeted_tool", false, false);
+        Harness harness = harness(
+                new ScriptedAgentModel(ModelTurn.toolCall(
+                        call("call-budget-blocked", tool.name())
+                )),
+                List.of(tool),
+                new DefaultToolPolicyEngine()
+        );
+
+        AgentRunResult result = execute(
+                harness, "budget-blocked", 3, Set.of(tool.name()), Set.of(),
+                ExecutionBudget.builder().maxToolCalls(0).build()
+        );
+
+        AgentRunEntity run = run("budget-blocked");
+        AgentStepEntity toolStep = steps("budget-blocked").get(1);
+        ToolExecutionEntity execution = executions("budget-blocked").get(0);
+        assertEquals(AgentStopReason.BUDGET_EXHAUSTED, result.stopReason());
+        assertEquals(AgentStopReason.BUDGET_EXHAUSTED, run.getStopReason());
+        assertEquals(AgentRunStatus.FAILED, run.getStatus());
+        assertEquals(0, tool.executions());
+        assertEquals(AgentStepStatus.SKIPPED, toolStep.getStatus());
+        assertEquals(ToolExecutionStatus.BLOCKED, execution.getStatus());
+        assertEquals("EXHAUSTED:TOOL_CALLS", execution.getErrorCode());
+        assertTrue(harness.events().events().stream()
+                .anyMatch(event -> event.type() == AgentEventType.BUDGET_BLOCKED));
+    }
+
     private Harness harness(
             AgentModel model,
             List<? extends AgentTool<?, ?>> tools,
@@ -383,6 +414,20 @@ class ExecutionPersistenceIntegrationTest {
             Set<String> allowedTools,
             Set<String> approvedToolCallIds
     ) {
+        return execute(
+                harness, suffix, maxIterations, allowedTools, approvedToolCallIds,
+                ExecutionBudget.unlimited()
+        );
+    }
+
+    private AgentRunResult execute(
+            Harness harness,
+            String suffix,
+            int maxIterations,
+            Set<String> allowedTools,
+            Set<String> approvedToolCallIds,
+            ExecutionBudget budget
+    ) {
         return harness.coordinator().execute(new AgentExecutionRequest(
                 new AgentRunSpec(
                         runId(suffix),
@@ -390,7 +435,8 @@ class ExecutionPersistenceIntegrationTest {
                         List.of(AgentMessage.user("test " + suffix)),
                         maxIterations,
                         allowedTools,
-                        approvedToolCallIds
+                        approvedToolCallIds,
+                        budget
                 ),
                 "p6-request-" + suffix,
                 6001L

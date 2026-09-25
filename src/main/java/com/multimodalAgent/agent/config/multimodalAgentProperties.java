@@ -3,6 +3,7 @@ package com.multimodalAgent.agent.config;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.Duration;
+import java.math.BigDecimal;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "multimodal-agent")
@@ -20,6 +21,7 @@ public class multimodalAgentProperties {
     private final Knowledge knowledge = new Knowledge();
     private final Multimodal multimodal = new Multimodal();
     private final Mcp mcp = new Mcp();
+    private final AgentRuntime runtime = new AgentRuntime();
 
     public Ai getAi() {
         return ai;
@@ -43,6 +45,110 @@ public class multimodalAgentProperties {
 
     public Mcp getMcp() {
         return mcp;
+    }
+
+    public AgentRuntime getRuntime() {
+        return runtime;
+    }
+
+    public static class AgentRuntime {
+        private boolean enabled;
+        private final Budget budget = new Budget();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Budget getBudget() {
+            return budget;
+        }
+    }
+
+    public static class Budget {
+        private Long maxModelCalls;
+        private Long maxToolCalls;
+        private Long maxInputTokens;
+        private Long maxOutputTokens;
+        private Long maxTotalTokens;
+        private BigDecimal maxCost;
+        private final Pricing pricing = new Pricing();
+
+        public Long getMaxModelCalls() {
+            return maxModelCalls;
+        }
+
+        public void setMaxModelCalls(Long maxModelCalls) {
+            this.maxModelCalls = maxModelCalls;
+        }
+
+        public Long getMaxToolCalls() {
+            return maxToolCalls;
+        }
+
+        public void setMaxToolCalls(Long maxToolCalls) {
+            this.maxToolCalls = maxToolCalls;
+        }
+
+        public Long getMaxInputTokens() {
+            return maxInputTokens;
+        }
+
+        public void setMaxInputTokens(Long maxInputTokens) {
+            this.maxInputTokens = maxInputTokens;
+        }
+
+        public Long getMaxOutputTokens() {
+            return maxOutputTokens;
+        }
+
+        public void setMaxOutputTokens(Long maxOutputTokens) {
+            this.maxOutputTokens = maxOutputTokens;
+        }
+
+        public Long getMaxTotalTokens() {
+            return maxTotalTokens;
+        }
+
+        public void setMaxTotalTokens(Long maxTotalTokens) {
+            this.maxTotalTokens = maxTotalTokens;
+        }
+
+        public BigDecimal getMaxCost() {
+            return maxCost;
+        }
+
+        public void setMaxCost(BigDecimal maxCost) {
+            this.maxCost = maxCost;
+        }
+
+        public Pricing getPricing() {
+            return pricing;
+        }
+    }
+
+    public static class Pricing {
+        private BigDecimal inputCostPerMillionTokens;
+        private BigDecimal outputCostPerMillionTokens;
+
+        public BigDecimal getInputCostPerMillionTokens() {
+            return inputCostPerMillionTokens;
+        }
+
+        public void setInputCostPerMillionTokens(BigDecimal value) {
+            this.inputCostPerMillionTokens = value;
+        }
+
+        public BigDecimal getOutputCostPerMillionTokens() {
+            return outputCostPerMillionTokens;
+        }
+
+        public void setOutputCostPerMillionTokens(BigDecimal value) {
+            this.outputCostPerMillionTokens = value;
+        }
     }
 
     public static class Ai {

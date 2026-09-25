@@ -1,8 +1,10 @@
 package com.multimodalAgent.agent.runtime.trace;
 
 import com.multimodalAgent.agent.runtime.AgentStopReason;
+import com.multimodalAgent.agent.runtime.budget.BudgetBlockReason;
 import com.multimodalAgent.agent.runtime.event.AgentEvent;
 import com.multimodalAgent.agent.runtime.event.AgentEventType;
+import com.multimodalAgent.agent.runtime.event.BudgetBlockedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelCompletedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelFailedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelStartedEvent;
@@ -230,6 +232,32 @@ public final class DecisionTraceBuilder {
                         failed.errorCode().name()
                 ));
                 childRequiresRunTerminal = true;
+            } else if (event instanceof BudgetBlockedEvent blocked) {
+                if (blocked.toolCorrelated()) {
+                    MutableToolDecision tool = requireTool(
+                            tools,
+                            blocked.toolCallId().orElseThrow(),
+                            blocked.toolName().orElseThrow(),
+                            blocked.iteration()
+                    );
+                    tool.transition(
+                            ToolTraceState.POLICY_ALLOW,
+                            ToolTraceState.BUDGET_BLOCKED,
+                            event.type()
+                    );
+                    tool.outcome = ToolExecutionOutcome.BLOCKED;
+                } else {
+                    validateModelAdmissionBudgetBlock(snapshot, index, blocked);
+                }
+                errors.add(new DecisionTraceError(
+                        event.sequence(),
+                        event.iteration(),
+                        DecisionTraceErrorSource.BUDGET,
+                        blocked.toolCallId().orElse(null),
+                        blocked.toolName().orElse(null),
+                        blocked.reason().name() + ":" + blocked.dimension().name()
+                ));
+                childRequiresRunTerminal = true;
             } else if (event instanceof RunCompletedEvent) {
                 terminalCount++;
                 stopReason = AgentStopReason.COMPLETED;
@@ -299,9 +327,27 @@ public final class DecisionTraceBuilder {
             boolean terminal = event instanceof ToolValidationFailedEvent
                     || event instanceof ToolSucceededEvent
                     || event instanceof ToolFailedEvent
+                    || event instanceof BudgetBlockedEvent
                     || event instanceof ToolPolicyEvaluatedEvent evaluated
                     && evaluated.decision() != ToolPolicyDecisionType.ALLOW;
             ordering.lifecycle(toolCallId, terminal);
+        }
+    }
+
+    private void validateModelAdmissionBudgetBlock(
+            List<AgentEvent> events,
+            int index,
+            BudgetBlockedEvent blocked
+    ) {
+        AgentEvent previous = index == 0 ? null : events.get(index - 1);
+        boolean firstModelAdmission = previous instanceof RunStartedEvent
+                && blocked.iteration() == 1;
+        boolean laterModelAdmission = previous instanceof ToolSucceededEvent
+                && blocked.iteration() == previous.iteration() + 1;
+        if (!firstModelAdmission && !laterModelAdmission) {
+            throw new IllegalArgumentException(
+                    "A run-level budget block must occur at a model admission boundary"
+            );
         }
     }
 
@@ -323,6 +369,9 @@ public final class DecisionTraceBuilder {
         }
         if (event instanceof ToolFailedEvent value) {
             return value.toolCallId();
+        }
+        if (event instanceof BudgetBlockedEvent value) {
+            return value.toolCallId().orElse(null);
         }
         return null;
     }
@@ -412,6 +461,16 @@ public final class DecisionTraceBuilder {
                 requireCause(cause instanceof ToolPolicyEvaluatedEvent evaluated
                                 && evaluated.decision() == ToolPolicyDecisionType.DENY,
                         "POLICY_BLOCKED requires a DENY policy decision");
+                requireSameIteration(terminal, cause);
+            }
+            case BUDGET_EXHAUSTED, BUDGET_UNVERIFIABLE -> {
+                BudgetBlockReason requiredReason = stopped.stopReason()
+                        == AgentStopReason.BUDGET_EXHAUSTED
+                        ? BudgetBlockReason.EXHAUSTED
+                        : BudgetBlockReason.UNVERIFIABLE;
+                requireCause(cause instanceof BudgetBlockedEvent blocked
+                                && blocked.reason() == requiredReason,
+                        stopped.stopReason() + " requires a matching BUDGET_BLOCKED event");
                 requireSameIteration(terminal, cause);
             }
             case MAX_ITERATIONS -> {
@@ -549,6 +608,7 @@ public final class DecisionTraceBuilder {
         POLICY_ALLOW,
         POLICY_DENY,
         POLICY_REQUIRE_APPROVAL,
+        BUDGET_BLOCKED,
         STARTED,
         SUCCEEDED,
         FAILED,

@@ -7,6 +7,7 @@ import com.multimodalAgent.agent.runtime.model.TokenUsage;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.LongSupplier;
 
@@ -85,6 +86,11 @@ public final class ModelGateway implements GovernedAgentModel {
 
     public ModelIdentity identity() {
         return identity;
+    }
+
+    @Override
+    public Optional<ModelIdentity> modelIdentity() {
+        return Optional.of(identity);
     }
 
     public ModelTimeoutPolicy timeoutPolicy() {

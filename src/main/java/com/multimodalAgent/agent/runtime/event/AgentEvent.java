@@ -14,6 +14,7 @@ public sealed interface AgentEvent permits
         ToolStartedEvent,
         ToolSucceededEvent,
         ToolFailedEvent,
+        BudgetBlockedEvent,
         RunWaitingApprovalEvent,
         RunCompletedEvent,
         RunStoppedEvent {

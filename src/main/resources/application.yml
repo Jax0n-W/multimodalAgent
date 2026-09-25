@@ -67,6 +67,16 @@ management:
 multimodal-agent:
   runtime:
     enabled: ${AGENT_RUNTIME_ENABLED:false}
+    budget:
+      max-model-calls: ${AGENT_BUDGET_MAX_MODEL_CALLS:}
+      max-tool-calls: ${AGENT_BUDGET_MAX_TOOL_CALLS:}
+      max-input-tokens: ${AGENT_BUDGET_MAX_INPUT_TOKENS:}
+      max-output-tokens: ${AGENT_BUDGET_MAX_OUTPUT_TOKENS:}
+      max-total-tokens: ${AGENT_BUDGET_MAX_TOTAL_TOKENS:}
+      max-cost: ${AGENT_BUDGET_MAX_COST:}
+      pricing:
+        input-cost-per-million-tokens: ${AGENT_BUDGET_INPUT_COST_PER_MILLION_TOKENS:}
+        output-cost-per-million-tokens: ${AGENT_BUDGET_OUTPUT_COST_PER_MILLION_TOKENS:}
   coordination:
     redis:
       enabled: ${REDIS_COORDINATION_ENABLED:false}

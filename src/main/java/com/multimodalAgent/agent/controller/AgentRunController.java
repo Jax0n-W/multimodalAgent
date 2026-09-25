@@ -4,6 +4,7 @@ import com.multimodalAgent.agent.dto.AgentRunStartRequest;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
+import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.security.CurrentUser;
 import com.multimodalAgent.agent.streaming.integration.StreamingAgentExecutionService;
@@ -32,9 +33,14 @@ import java.util.UUID;
 public final class AgentRunController {
 
     private final StreamingAgentExecutionService execution;
+    private final ExecutionBudget budget;
 
-    public AgentRunController(StreamingAgentExecutionService execution) {
+    public AgentRunController(
+            StreamingAgentExecutionService execution,
+            ExecutionBudget budget
+    ) {
         this.execution = execution;
+        this.budget = budget;
     }
 
     @PostMapping
@@ -48,7 +54,8 @@ public final class AgentRunController {
                 List.of(AgentMessage.user(request.message())),
                 3,
                 Set.of("knowledge_search"),
-                Set.of()
+                Set.of(),
+                budget
         );
         AgentExecutionRequest executionRequest = new AgentExecutionRequest(
                 spec,

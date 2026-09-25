@@ -1,6 +1,7 @@
 package com.multimodalAgent.agent.runtime;
 
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
+import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
 
 import java.util.List;
 import java.util.Objects;
@@ -12,7 +13,8 @@ public record AgentRunSpec(
         List<AgentMessage> messages,
         int maxIterations,
         Set<String> allowedTools, // 允许调用的工具名称集合
-        Set<String> approvedToolCallIds
+        Set<String> approvedToolCallIds,
+        ExecutionBudget budget
 ) {
 
     public AgentRunSpec(
@@ -21,7 +23,24 @@ public record AgentRunSpec(
             List<AgentMessage> messages,
             int maxIterations
     ) {
-        this(runId, sessionId, messages, maxIterations, Set.of(), Set.of());
+        this(
+                runId, sessionId, messages, maxIterations,
+                Set.of(), Set.of(), ExecutionBudget.unlimited()
+        );
+    }
+
+    public AgentRunSpec(
+            String runId,
+            String sessionId,
+            List<AgentMessage> messages,
+            int maxIterations,
+            Set<String> allowedTools,
+            Set<String> approvedToolCallIds
+    ) {
+        this(
+                runId, sessionId, messages, maxIterations,
+                allowedTools, approvedToolCallIds, ExecutionBudget.unlimited()
+        );
     }
 
     public AgentRunSpec {
@@ -40,6 +59,7 @@ public record AgentRunSpec(
         }
         Objects.requireNonNull(allowedTools, "allowedTools must not be null");
         Objects.requireNonNull(approvedToolCallIds, "approvedToolCallIds must not be null");
+        Objects.requireNonNull(budget, "budget must not be null");
         allowedTools = Set.copyOf(allowedTools);
         approvedToolCallIds = Set.copyOf(approvedToolCallIds);
     }

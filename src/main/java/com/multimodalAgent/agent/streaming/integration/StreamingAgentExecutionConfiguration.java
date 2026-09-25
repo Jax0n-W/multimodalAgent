@@ -18,6 +18,8 @@ import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceCom
 import com.multimodalAgent.agent.persistence.integration.PersistentAgentExecutionCoordinator;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunner;
+import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
+import com.multimodalAgent.agent.runtime.budget.ModelPricing;
 import com.multimodalAgent.agent.runtime.event.AgentEventPublisher;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddleware;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
@@ -54,6 +56,51 @@ import java.util.function.Function;
         havingValue = "true"
 )
 public class StreamingAgentExecutionConfiguration {
+
+    @Bean
+    public ExecutionBudget agentExecutionBudget(multimodalAgentProperties properties) {
+        multimodalAgentProperties.Budget configured = properties.getRuntime().getBudget();
+        ExecutionBudget.Builder builder = ExecutionBudget.builder();
+        if (configured.getMaxModelCalls() != null) {
+            builder.maxModelCalls(configured.getMaxModelCalls());
+        }
+        if (configured.getMaxToolCalls() != null) {
+            builder.maxToolCalls(configured.getMaxToolCalls());
+        }
+        if (configured.getMaxInputTokens() != null) {
+            builder.maxInputTokens(configured.getMaxInputTokens());
+        }
+        if (configured.getMaxOutputTokens() != null) {
+            builder.maxOutputTokens(configured.getMaxOutputTokens());
+        }
+        if (configured.getMaxTotalTokens() != null) {
+            builder.maxTotalTokens(configured.getMaxTotalTokens());
+        }
+        if (configured.getMaxCost() != null) {
+            builder.maxCost(configured.getMaxCost());
+        }
+
+        multimodalAgentProperties.Pricing pricing = configured.getPricing();
+        boolean hasInputPrice = pricing.getInputCostPerMillionTokens() != null;
+        boolean hasOutputPrice = pricing.getOutputCostPerMillionTokens() != null;
+        if (hasInputPrice != hasOutputPrice) {
+            throw new IllegalStateException(
+                    "Both input and output model prices must be configured together"
+            );
+        }
+        if (hasInputPrice) {
+            String provider = properties.getAi().getProvider().toLowerCase(Locale.ROOT);
+            String modelName = "ollama".equals(provider)
+                    ? properties.getAi().getOllama().getModel()
+                    : properties.getAi().getOpenai().getModel();
+            builder.pricing(new ModelPricing(
+                    new ModelIdentity(provider, modelName),
+                    pricing.getInputCostPerMillionTokens(),
+                    pricing.getOutputCostPerMillionTokens()
+            ));
+        }
+        return builder.build();
+    }
 
     @Bean
     public StreamingModelInvocationScope agentStreamingModelInvocationScope() {

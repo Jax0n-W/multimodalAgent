@@ -3,6 +3,7 @@ package com.multimodalAgent.agent.runtime.tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.runtime.event.AgentEventEmitter;
+import com.multimodalAgent.agent.runtime.event.BudgetBlockedEvent;
 import com.multimodalAgent.agent.runtime.event.NoopAgentEventPublisher;
 import com.multimodalAgent.agent.runtime.event.ToolFailedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolPolicyEvaluatedEvent;
@@ -13,6 +14,10 @@ import com.multimodalAgent.agent.runtime.event.ToolValidationFailedEvent;
 import com.multimodalAgent.agent.runtime.control.ExecutionCancelledException;
 import com.multimodalAgent.agent.runtime.control.ExecutionCheckpoint;
 import com.multimodalAgent.agent.runtime.control.RuntimeCancellation;
+import com.multimodalAgent.agent.runtime.budget.BudgetBlock;
+import com.multimodalAgent.agent.runtime.budget.BudgetBlockedException;
+import com.multimodalAgent.agent.runtime.budget.BudgetSession;
+import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
 import com.multimodalAgent.agent.runtime.extension.AgentRuntimeContext;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareFailureException;
@@ -26,6 +31,7 @@ import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyRequest;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 public final class ToolExecutor {
 
@@ -54,7 +60,8 @@ public final class ToolExecutor {
                 new AgentEventEmitter(policyContext.runId(), NoopAgentEventPublisher.INSTANCE),
                 1,
                 AgentRuntimeContext.minimal(policyContext.runId(), policyContext.sessionId()),
-                RuntimeMiddlewareChain.empty()
+                RuntimeMiddlewareChain.empty(),
+                new BudgetSession(ExecutionBudget.unlimited(), Optional.empty())
         );
     }
 
@@ -74,7 +81,8 @@ public final class ToolExecutor {
                 eventEmitter,
                 iteration,
                 AgentRuntimeContext.minimal(policyContext.runId(), policyContext.sessionId()),
-                RuntimeMiddlewareChain.empty()
+                RuntimeMiddlewareChain.empty(),
+                new BudgetSession(ExecutionBudget.unlimited(), Optional.empty())
         );
     }
 
@@ -86,11 +94,28 @@ public final class ToolExecutor {
             AgentRuntimeContext runtimeContext,
             RuntimeMiddlewareChain middlewareChain
     ) {
+        return execute(
+                toolCall, policyContext, eventEmitter, iteration, runtimeContext,
+                middlewareChain,
+                new BudgetSession(ExecutionBudget.unlimited(), Optional.empty())
+        );
+    }
+
+    public ToolResult execute(
+            ToolCall toolCall,
+            ToolPolicyContext policyContext,
+            AgentEventEmitter eventEmitter,
+            int iteration,
+            AgentRuntimeContext runtimeContext,
+            RuntimeMiddlewareChain middlewareChain,
+            BudgetSession budgetSession
+    ) {
         Objects.requireNonNull(toolCall, "toolCall must not be null");
         Objects.requireNonNull(policyContext, "policyContext must not be null");
         Objects.requireNonNull(eventEmitter, "eventEmitter must not be null");
         Objects.requireNonNull(runtimeContext, "runtimeContext must not be null");
         Objects.requireNonNull(middlewareChain, "middlewareChain must not be null");
+        Objects.requireNonNull(budgetSession, "budgetSession must not be null");
         if (iteration < 1) {
             throw new IllegalArgumentException("iteration must be at least 1");
         }
@@ -115,7 +140,8 @@ public final class ToolExecutor {
                     eventEmitter,
                     iteration,
                     runtimeContext,
-                    middlewareChain
+                    middlewareChain,
+                    budgetSession
             );
         } catch (ToolValidationException exception) {
             eventEmitter.emit(
@@ -131,6 +157,8 @@ public final class ToolExecutor {
         } catch (RuntimeMiddlewareFailureException exception) {
             throw exception;
         } catch (ExecutionCancelledException exception) {
+            throw exception;
+        } catch (BudgetBlockedException exception) {
             throw exception;
         } catch (RuntimeException exception) {
             emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.EXECUTION_FAILED);
@@ -148,7 +176,8 @@ public final class ToolExecutor {
             AgentEventEmitter eventEmitter,
             int iteration,
             AgentRuntimeContext runtimeContext,
-            RuntimeMiddlewareChain middlewareChain
+            RuntimeMiddlewareChain middlewareChain,
+            BudgetSession budgetSession
     ) {
         I input = argumentResolver.resolve(toolCall.arguments(), tool.descriptor().inputType());
         eventEmitter.emit(
@@ -191,6 +220,13 @@ public final class ToolExecutor {
             return ToolResult.approvalRequired(decision);
         }
 
+        if (RuntimeCancellation.requested(
+                runtimeContext,
+                ExecutionCheckpoint.BEFORE_TOOL_EXECUTION
+        )) {
+            throw new ExecutionCancelledException();
+        }
+
         return middlewareChain.aroundToolExecution(
                 runtimeContext,
                 new ToolExecutionMetadata(toolCall.id(), toolCall.name(), iteration),
@@ -201,7 +237,7 @@ public final class ToolExecutor {
                         evaluatedDecision,
                         eventEmitter,
                         iteration,
-                        runtimeContext
+                        budgetSession
                 )
         );
     }
@@ -213,13 +249,18 @@ public final class ToolExecutor {
             ToolPolicyDecision decision,
             AgentEventEmitter eventEmitter,
             int iteration,
-            AgentRuntimeContext runtimeContext
+            BudgetSession budgetSession
     ) {
-        if (RuntimeCancellation.requested(
-                runtimeContext,
-                ExecutionCheckpoint.BEFORE_TOOL_EXECUTION
-        )) {
-            throw new ExecutionCancelledException();
+        Optional<BudgetBlock> budgetBlock = budgetSession.admitToolCall();
+        if (budgetBlock.isPresent()) {
+            BudgetBlock block = budgetBlock.get();
+            eventEmitter.emit(
+                    iteration,
+                    metadata -> BudgetBlockedEvent.forTool(
+                            metadata, block, toolCall.id(), toolCall.name()
+                    )
+            );
+            throw new BudgetBlockedException(block);
         }
         eventEmitter.emit(
                 iteration,

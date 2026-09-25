@@ -15,6 +15,7 @@ import com.multimodalAgent.agent.persistence.repository.ToolExecutionRepository;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.runtime.event.AgentEvent;
+import com.multimodalAgent.agent.runtime.event.BudgetBlockedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelCompletedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelFailedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelStartedEvent;
@@ -60,6 +61,7 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
             ToolStartedEvent.class,
             ToolSucceededEvent.class,
             ToolFailedEvent.class,
+            BudgetBlockedEvent.class,
             RunWaitingApprovalEvent.class,
             RunCompletedEvent.class,
             RunStoppedEvent.class
@@ -133,6 +135,8 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
             recordToolSucceeded(run, succeeded);
         } else if (event instanceof ToolFailedEvent failed) {
             recordToolFailed(run, failed);
+        } else if (event instanceof BudgetBlockedEvent blocked) {
+            recordBudgetBlocked(run, blocked);
         } else if (event instanceof RunCompletedEvent) {
             recordRunCompleted(run, event);
         } else if (event instanceof RunStoppedEvent stopped) {
@@ -280,6 +284,16 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         execution.setCompletedAt(event.occurredAt());
         execution.setErrorCode(event.errorCode().name());
         toolExecutionRepository.saveAndFlush(execution);
+        updateRunProgress(run, event.iteration(), AgentRunPhase.FINALIZING);
+    }
+
+    private void recordBudgetBlocked(AgentRunEntity run, BudgetBlockedEvent event) {
+        event.toolCallId().ifPresent(toolCallId -> markNonExecuted(
+                event.runId(),
+                toolCallId,
+                event.occurredAt(),
+                event.reason().name() + ":" + event.dimension().name()
+        ));
         updateRunProgress(run, event.iteration(), AgentRunPhase.FINALIZING);
     }
 

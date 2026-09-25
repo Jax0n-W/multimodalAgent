@@ -8,6 +8,9 @@ import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
+import com.multimodalAgent.agent.runtime.budget.BudgetDimension;
+import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
+import com.multimodalAgent.agent.runtime.event.BudgetBlockedEvent;
 import com.multimodalAgent.agent.runtime.event.AgentEventType;
 import com.multimodalAgent.agent.runtime.event.RecordingAgentEventPublisher;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
@@ -183,6 +186,69 @@ class RealModelAgentSmokeTest {
         );
     }
 
+    @Test
+    void shouldBlockSecondRealModelCallAtModelBudget() {
+        KnowledgeSearchTool tool = new KnowledgeSearchTool();
+        RecordingAgentEventPublisher publisher = new RecordingAgentEventPublisher();
+        SmokeRuntime runtime = runtime(List.of(tool), publisher);
+
+        AgentRunResult result = runtime.coordinator().execute(request(
+                "p92-ollama-model-budget",
+                toolProtocolMessages(),
+                Set.of("knowledge_search"),
+                ExecutionBudget.builder().maxModelCalls(1).build()
+        ));
+
+        assertEquals(AgentStopReason.BUDGET_EXHAUSTED, result.stopReason());
+        assertEquals(1, runtime.model().requests().size());
+        assertEquals(1, tool.executions());
+        assertEquals(1, publisher.events().stream()
+                .filter(event -> event.type() == AgentEventType.MODEL_STARTED).count());
+        assertEquals(BudgetDimension.MODEL_CALLS, budgetBlock(publisher).dimension());
+        new DecisionTraceBuilder().build(publisher.events());
+    }
+
+    @Test
+    void shouldBlockRealToolBeforeStartAtToolBudget() {
+        KnowledgeSearchTool tool = new KnowledgeSearchTool();
+        RecordingAgentEventPublisher publisher = new RecordingAgentEventPublisher();
+        SmokeRuntime runtime = runtime(List.of(tool), publisher);
+
+        AgentRunResult result = runtime.coordinator().execute(request(
+                "p92-ollama-tool-budget",
+                toolProtocolMessages(),
+                Set.of("knowledge_search"),
+                ExecutionBudget.builder().maxToolCalls(0).build()
+        ));
+
+        assertEquals(AgentStopReason.BUDGET_EXHAUSTED, result.stopReason());
+        assertEquals(1, runtime.model().requests().size());
+        assertEquals(0, tool.executions());
+        assertFalse(eventTypes(publisher).contains(AgentEventType.TOOL_STARTED));
+        assertEquals(BudgetDimension.TOOL_CALLS, budgetBlock(publisher).dimension());
+        new DecisionTraceBuilder().build(publisher.events());
+    }
+
+    @Test
+    void shouldBlockFutureRealToolAtConfirmedTokenBudget() {
+        KnowledgeSearchTool tool = new KnowledgeSearchTool();
+        RecordingAgentEventPublisher publisher = new RecordingAgentEventPublisher();
+        SmokeRuntime runtime = runtime(List.of(tool), publisher);
+
+        AgentRunResult result = runtime.coordinator().execute(request(
+                "p92-ollama-token-budget",
+                toolProtocolMessages(),
+                Set.of("knowledge_search"),
+                ExecutionBudget.builder().maxTotalTokens(1).build()
+        ));
+
+        assertTrue(runtime.model().turns().get(0).tokenUsage().isComplete());
+        assertEquals(AgentStopReason.BUDGET_EXHAUSTED, result.stopReason());
+        assertEquals(0, tool.executions());
+        assertEquals(BudgetDimension.TOTAL_TOKENS, budgetBlock(publisher).dimension());
+        new DecisionTraceBuilder().build(publisher.events());
+    }
+
     private SmokeRuntime runtime(
             List<? extends AgentTool<?, ?>> tools,
             RecordingAgentEventPublisher publisher
@@ -264,6 +330,15 @@ class RealModelAgentSmokeTest {
             List<AgentMessage> messages,
             Set<String> allowedTools
     ) {
+        return request(runId, messages, allowedTools, ExecutionBudget.unlimited());
+    }
+
+    private AgentExecutionRequest request(
+            String runId,
+            List<AgentMessage> messages,
+            Set<String> allowedTools,
+            ExecutionBudget budget
+    ) {
         return new AgentExecutionRequest(
                 new AgentRunSpec(
                         runId,
@@ -271,11 +346,30 @@ class RealModelAgentSmokeTest {
                         messages,
                         3,
                         allowedTools,
-                        Set.of()
+                        Set.of(),
+                        budget
                 ),
                 "request-" + runId,
                 1L
         );
+    }
+
+    private List<AgentMessage> toolProtocolMessages() {
+        return List.of(
+                AgentMessage.system(
+                        "If there is no knowledge_search result, call knowledge_search exactly "
+                                + "once with query Redis Sentinel and do not answer. If a result "
+                                + "exists, answer from it without another tool call."
+                ),
+                AgentMessage.user("Use knowledge_search to explain Redis Sentinel.")
+        );
+    }
+
+    private BudgetBlockedEvent budgetBlock(RecordingAgentEventPublisher publisher) {
+        return (BudgetBlockedEvent) publisher.events().stream()
+                .filter(event -> event.type() == AgentEventType.BUDGET_BLOCKED)
+                .findFirst()
+                .orElseThrow();
     }
 
     private String environmentOrDefault(String name, String fallback) {
