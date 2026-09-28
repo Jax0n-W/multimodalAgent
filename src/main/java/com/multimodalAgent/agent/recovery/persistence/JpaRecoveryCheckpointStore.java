@@ -10,6 +10,7 @@ import com.multimodalAgent.agent.recovery.RecoveryCheckpoint;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointBoundary;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointConflictException;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointCorruptionException;
+import com.multimodalAgent.agent.recovery.RecoveryCheckpointSequenceException;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointStore;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -50,7 +51,7 @@ public class JpaRecoveryCheckpointStore implements RecoveryCheckpointStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void persist(RecoveryCheckpoint checkpoint) {
         Objects.requireNonNull(checkpoint, "checkpoint must not be null");
-        validateReferences(checkpoint.runId(), checkpoint.runtimeConfigSnapshotId());
+        validateReferencesForAppend(checkpoint.runId(), checkpoint.runtimeConfigSnapshotId());
         String stateJson = codec.encode(checkpoint);
         Optional<AgentRecoveryCheckpointEntity> existing =
                 checkpointRepository.findByCheckpointId(checkpoint.checkpointId());
@@ -60,6 +61,16 @@ public class JpaRecoveryCheckpointStore implements RecoveryCheckpointStore {
             }
             return;
         }
+        checkpointRepository.findFirstByRunIdOrderByCheckpointSequenceDesc(checkpoint.runId())
+                .ifPresent(latest -> {
+                    if (checkpoint.sequence() <= latest.getCheckpointSequence()) {
+                        throw new RecoveryCheckpointSequenceException(
+                                checkpoint.runId(),
+                                checkpoint.sequence(),
+                                latest.getCheckpointSequence()
+                        );
+                    }
+                });
         checkpointRepository.saveAndFlush(new AgentRecoveryCheckpointEntity(
                 checkpoint.checkpointId(),
                 checkpoint.runId(),
@@ -159,6 +170,19 @@ public class JpaRecoveryCheckpointStore implements RecoveryCheckpointStore {
                         "Recovery checkpoint run does not exist: " + runId
                 )
         );
+        validateSnapshotLinkage(run, runId, snapshotId);
+    }
+
+    private void validateReferencesForAppend(String runId, String snapshotId) {
+        AgentRunEntity run = runRepository.findByRunIdForRecoveryAppend(runId).orElseThrow(() ->
+                new RecoveryCheckpointCorruptionException(
+                        "Recovery checkpoint run does not exist: " + runId
+                )
+        );
+        validateSnapshotLinkage(run, runId, snapshotId);
+    }
+
+    private void validateSnapshotLinkage(AgentRunEntity run, String runId, String snapshotId) {
         if (!snapshotRepository.existsById(snapshotId)) {
             throw new RecoveryCheckpointCorruptionException(
                     "Recovery checkpoint config snapshot does not exist: " + snapshotId

@@ -18,6 +18,8 @@ Checkpoint capture uses the existing pure-Java Runtime middleware seam. It recei
 
 The V4 table stores one row per checkpoint with a deterministic checkpoint ID and monotonically increasing run-local sequence. A repeated write of identical content is idempotent. Reusing an identity with different content fails. Rows are never updated. Reads accept only the current schema and validate JSON, domain invariants, the referenced run, and the original runtime configuration snapshot. Unsupported or corrupt state fails closed.
 
+Run-local sequence is not merely unique. For a genuinely new checkpoint, its sequence must be strictly greater than the latest durable sequence for the same run; gaps are allowed. An exact retry of an existing identical checkpoint remains idempotent because identity comparison precedes the monotonicity check. The durable store serializes append validation and insertion per run by locking the corresponding `AgentRun` row within the same `REQUIRES_NEW` transaction.
+
 Budget state records model and tool calls, input/output/total tokens, cost when knowable, and whether unknown usage was observed. It does not serialize `BudgetSession`. Started work remains consumed under P9.2 semantics, and unknown usage remains distinct from zero.
 
 ## Consequences

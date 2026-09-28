@@ -1,6 +1,5 @@
 package com.multimodalAgent.agent.recovery.persistence;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
 import com.multimodalAgent.agent.persistence.entity.AgentRuntimeConfigSnapshotEntity;
 import com.multimodalAgent.agent.persistence.model.AgentRunPhase;
@@ -13,13 +12,19 @@ import com.multimodalAgent.agent.recovery.RecoveryCheckpoint;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointBoundary;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointConflictException;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointCorruptionException;
+import com.multimodalAgent.agent.recovery.RecoveryCheckpointSequenceException;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ToolCall;
+import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,8 +36,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -46,6 +58,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
+@Import(JpaRecoveryCheckpointStore.class)
+@ImportAutoConfiguration(JacksonAutoConfiguration.class)
 class RecoveryCheckpointPersistenceTest {
 
     private static final String RUN_ID = "recovery-run";
@@ -63,6 +77,7 @@ class RecoveryCheckpointPersistenceTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
     private JpaRecoveryCheckpointStore store;
 
     @BeforeEach
@@ -79,12 +94,6 @@ class RecoveryCheckpointPersistenceTest {
         );
         run.setRuntimeConfigSnapshotId(SNAPSHOT_ID);
         runRepository.saveAndFlush(run);
-        store = new JpaRecoveryCheckpointStore(
-                checkpointRepository,
-                runRepository,
-                snapshotRepository,
-                new ObjectMapper().findAndRegisterModules()
-        );
     }
 
     @Test
@@ -133,6 +142,100 @@ class RecoveryCheckpointPersistenceTest {
 
         assertEquals(List.of(first, second), store.listByRunId(RUN_ID));
         assertEquals(second, store.findLatestByRunId(RUN_ID).orElseThrow());
+    }
+
+    @Test
+    void rejectsBackwardAppendAndPreservesDurableHistory() {
+        RecoveryCheckpoint first = checkpoint("cp-sequence-1", 1, 1);
+        RecoveryCheckpoint third = checkpoint("cp-sequence-3", 3, 3);
+        store.persist(first);
+        store.persist(third);
+
+        assertThrows(
+                RecoveryCheckpointSequenceException.class,
+                () -> store.persist(checkpoint("cp-sequence-2", 2, 2))
+        );
+
+        assertEquals(List.of(first, third), store.listByRunId(RUN_ID));
+    }
+
+    @Test
+    void rejectsEqualSequenceForNewCheckpointIdentity() {
+        RecoveryCheckpoint original = checkpoint("cp-equal-a", 2, 2);
+        store.persist(original);
+
+        assertThrows(
+                RecoveryCheckpointSequenceException.class,
+                () -> store.persist(checkpoint("cp-equal-b", 2, 2))
+        );
+
+        assertEquals(List.of(original), store.listByRunId(RUN_ID));
+    }
+
+    @Test
+    void exactRetryAtLatestSequenceRemainsIdempotent() {
+        RecoveryCheckpoint latest = checkpoint("cp-retry-latest", 3, 3);
+        store.persist(latest);
+        store.persist(latest);
+
+        assertEquals(1, checkpointRepository.count());
+        assertEquals(latest, store.findLatestByRunId(RUN_ID).orElseThrow());
+    }
+
+    @Test
+    void allowsForwardSequenceGap() {
+        RecoveryCheckpoint first = checkpoint("cp-gap-1", 1, 1);
+        RecoveryCheckpoint third = checkpoint("cp-gap-3", 3, 3);
+
+        store.persist(first);
+        store.persist(third);
+
+        assertEquals(List.of(first, third), store.listByRunId(RUN_ID));
+    }
+
+    @Test
+    void serializesConcurrentAppendValidationOnTheRunRow() throws Exception {
+        RecoveryCheckpoint first = checkpoint("cp-concurrent-1", 1, 1);
+        RecoveryCheckpoint higher = checkpoint("cp-concurrent-3", 3, 3);
+        RecoveryCheckpoint lower = checkpoint("cp-concurrent-2", 2, 2);
+        store.persist(first);
+
+        CyclicBarrier concurrentStart = new CyclicBarrier(2);
+        ConcurrentLinkedQueue<Long> rejectedSequences = new ConcurrentLinkedQueue<>();
+        ExecutorService writers = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> higherResult = writers.submit(() -> persistConcurrently(
+                    higher, concurrentStart, rejectedSequences
+            ));
+            Future<?> lowerResult = writers.submit(() -> persistConcurrently(
+                    lower, concurrentStart, rejectedSequences
+            ));
+            higherResult.get(5, TimeUnit.SECONDS);
+            lowerResult.get(5, TimeUnit.SECONDS);
+        } finally {
+            writers.shutdownNow();
+        }
+
+        List<RecoveryCheckpoint> durable = store.listByRunId(RUN_ID);
+        assertTrue(
+                durable.equals(List.of(first, lower, higher))
+                        || durable.equals(List.of(first, higher))
+        );
+        if (durable.equals(List.of(first, higher))) {
+            assertEquals(List.of(2L), List.copyOf(rejectedSequences));
+        } else {
+            assertTrue(rejectedSequences.isEmpty());
+        }
+    }
+
+    @Test
+    void recoveryAppendLookupRequiresPessimisticWriteLock() throws Exception {
+        Lock lock = AgentRunRepository.class
+                .getMethod("findByRunIdForRecoveryAppend", String.class)
+                .getAnnotation(Lock.class);
+
+        assertNotNull(lock);
+        assertEquals(LockModeType.PESSIMISTIC_WRITE, lock.value());
     }
 
     @Test
@@ -203,6 +306,21 @@ class RecoveryCheckpointPersistenceTest {
                 Instant.parse("2026-09-28T01:02:03.123456Z"),
                 RecoveryCheckpoint.CURRENT_SCHEMA_VERSION
         );
+    }
+
+    private void persistConcurrently(
+            RecoveryCheckpoint checkpoint,
+            CyclicBarrier concurrentStart,
+            ConcurrentLinkedQueue<Long> rejectedSequences
+    ) {
+        try {
+            concurrentStart.await(5, TimeUnit.SECONDS);
+            store.persist(checkpoint);
+        } catch (RecoveryCheckpointSequenceException exception) {
+            rejectedSequences.add(checkpoint.sequence());
+        } catch (Exception exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private void insertRaw(String checkpointId, long sequence, int schemaVersion, String stateJson) {
