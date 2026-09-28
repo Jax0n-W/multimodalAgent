@@ -87,6 +87,20 @@ public record AgentExecutionRequest(
         );
     }
 
+    public AgentExecutionRequest withRuntimeConfigSnapshotId(String snapshotId) {
+        if (snapshotId == null || snapshotId.isBlank()) {
+            throw new IllegalArgumentException("snapshotId must not be blank");
+        }
+        return new AgentExecutionRequest(
+                runSpec,
+                requestId,
+                userId,
+                snapshotId,
+                cancellationContext,
+                runtimeContextContributors
+        );
+    }
+
     private static void requireOptionalText(String value, String field) {
         if (value != null && value.isBlank()) {
             throw new IllegalArgumentException(field + " must not be blank when present");

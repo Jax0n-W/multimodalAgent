@@ -12,6 +12,11 @@ import com.multimodalAgent.agent.coordination.RunLeaseStore;
 import com.multimodalAgent.agent.coordination.integration.CoordinatedAgentExecutionCoordinator;
 import com.multimodalAgent.agent.coordination.integration.ExecutionCoordinationBoundaryMiddleware;
 import com.multimodalAgent.agent.coordination.watchdog.RunLeaseWatchdogFactory;
+import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotFactory;
+import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotStore;
+import com.multimodalAgent.agent.execution.config.ResolvedExecutionConfigResolver;
+import com.multimodalAgent.agent.execution.config.ResolvedModelConfig;
+import com.multimodalAgent.agent.execution.config.SnapshottingAgentExecutionCoordinator;
 import com.multimodalAgent.agent.harness.AgentExecutionCoordinator;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceComposition;
@@ -43,6 +48,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -58,7 +64,27 @@ import java.util.function.Function;
 public class StreamingAgentExecutionConfiguration {
 
     @Bean
-    public ExecutionBudget agentExecutionBudget(multimodalAgentProperties properties) {
+    public ResolvedModelConfig agentResolvedModelConfig(multimodalAgentProperties properties) {
+        String provider = properties.getAi().getProvider().toLowerCase(Locale.ROOT);
+        String modelName = "ollama".equals(provider)
+                ? properties.getAi().getOllama().getModel()
+                : properties.getAi().getOpenai().getModel();
+        return new ResolvedModelConfig(
+                new ModelIdentity(provider, modelName),
+                BigDecimal.valueOf(properties.getAi().getTemperature()),
+                properties.getAi().getMaxTokens(),
+                new ModelTimeoutPolicy(
+                        properties.getAi().getInvocationTimeout(),
+                        properties.getAi().getIdleTimeout()
+                )
+        );
+    }
+
+    @Bean
+    public ExecutionBudget agentExecutionBudget(
+            multimodalAgentProperties properties,
+            ResolvedModelConfig modelConfig
+    ) {
         multimodalAgentProperties.Budget configured = properties.getRuntime().getBudget();
         ExecutionBudget.Builder builder = ExecutionBudget.builder();
         if (configured.getMaxModelCalls() != null) {
@@ -89,17 +115,27 @@ public class StreamingAgentExecutionConfiguration {
             );
         }
         if (hasInputPrice) {
-            String provider = properties.getAi().getProvider().toLowerCase(Locale.ROOT);
-            String modelName = "ollama".equals(provider)
-                    ? properties.getAi().getOllama().getModel()
-                    : properties.getAi().getOpenai().getModel();
             builder.pricing(new ModelPricing(
-                    new ModelIdentity(provider, modelName),
+                    modelConfig.identity(),
                     pricing.getInputCostPerMillionTokens(),
                     pricing.getOutputCostPerMillionTokens()
             ));
         }
         return builder.build();
+    }
+
+    @Bean
+    public ResolvedExecutionConfigResolver agentResolvedExecutionConfigResolver(
+            ResolvedModelConfig modelConfig
+    ) {
+        return new ResolvedExecutionConfigResolver(modelConfig);
+    }
+
+    @Bean
+    public ExecutionConfigSnapshotFactory agentExecutionConfigSnapshotFactory(
+            ObjectMapper objectMapper
+    ) {
+        return new ExecutionConfigSnapshotFactory(objectMapper);
     }
 
     @Bean
@@ -133,33 +169,26 @@ public class StreamingAgentExecutionConfiguration {
     @Bean
     public ModelGateway agentStreamingModel(
             OpenAiCompatibleStreamingClient client,
-            multimodalAgentProperties properties,
+            ResolvedModelConfig modelConfig,
             ObjectMapper objectMapper,
             StreamingModelInvocationScope invocationScope,
             ObjectProvider<ModelInvocationTelemetrySink> telemetryProvider
     ) {
-        String provider = properties.getAi().getProvider().toLowerCase(Locale.ROOT);
-        String modelName = "ollama".equals(provider)
-                ? properties.getAi().getOllama().getModel()
-                : properties.getAi().getOpenai().getModel();
         AgentModel adapter = new OpenAiCompatibleStreamingAgentModelAdapter(
                 client,
                 new OpenAiCompatibleStreamingOptions(
-                        provider,
-                        modelName,
-                        properties.getAi().getTemperature(),
-                        properties.getAi().getMaxTokens()
+                        modelConfig.identity().provider(),
+                        modelConfig.identity().model(),
+                        modelConfig.temperature().doubleValue(),
+                        modelConfig.maxTokensPerInvocation()
                 ),
                 objectMapper,
                 invocationScope
         );
         return new ModelGateway(
                 adapter,
-                new ModelIdentity(provider, modelName),
-                new ModelTimeoutPolicy(
-                        properties.getAi().getInvocationTimeout(),
-                        properties.getAi().getIdleTimeout()
-                ),
+                modelConfig.identity(),
+                modelConfig.timeoutPolicy(),
                 telemetryProvider.getIfAvailable(() -> ModelInvocationTelemetrySink.NOOP)
         );
     }
@@ -175,6 +204,9 @@ public class StreamingAgentExecutionConfiguration {
             ExecutionStreamHub hub,
             ExecutionStreamPublisher publisher,
             LocalExecutionControlRegistry controls,
+            ResolvedExecutionConfigResolver configResolver,
+            ExecutionConfigSnapshotFactory snapshotFactory,
+            ExecutionConfigSnapshotStore snapshotStore,
             ObjectProvider<RunLeaseStore> leaseStoreProvider,
             ObjectProvider<RunLeaseWatchdogFactory> watchdogFactoryProvider
     ) {
@@ -214,13 +246,25 @@ public class StreamingAgentExecutionConfiguration {
                 new RuntimeMiddlewareChain(middleware)
         );
         PersistentAgentExecutionCoordinator persistent = persistence.persistentCoordinator(core);
-        Function<AgentExecutionRequest, AgentRunResult> execution = leaseStore == null
+        Function<AgentExecutionRequest, AgentRunResult> governedExecution = leaseStore == null
                 ? persistent::execute
                 : new CoordinatedAgentExecutionCoordinator(
                         leaseStore,
                         watchdogFactory,
                         persistent
-                )::execute;
-        return new StreamingAgentExecutionService(execution, hub, publisher, controls);
+                 )::execute;
+        SnapshottingAgentExecutionCoordinator snapshotting =
+                new SnapshottingAgentExecutionCoordinator(
+                        configResolver,
+                        snapshotFactory,
+                        snapshotStore,
+                        governedExecution
+                );
+        return new StreamingAgentExecutionService(
+                snapshotting::execute,
+                hub,
+                publisher,
+                controls
+        );
     }
 }

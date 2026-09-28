@@ -38,6 +38,9 @@ public class AgentRunEntity {
     @Column(name = "session_id", nullable = false, updatable = false, length = 64)
     private String sessionId;
 
+    @Column(name = "runtime_config_snapshot_id", updatable = false, length = 96)
+    private String runtimeConfigSnapshotId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
     private AgentRunStatus status;
@@ -134,6 +137,19 @@ public class AgentRunEntity {
 
     public String getSessionId() {
         return sessionId;
+    }
+
+    public String getRuntimeConfigSnapshotId() {
+        return runtimeConfigSnapshotId;
+    }
+
+    public void setRuntimeConfigSnapshotId(String runtimeConfigSnapshotId) {
+        if (runtimeConfigSnapshotId != null && runtimeConfigSnapshotId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "runtimeConfigSnapshotId must not be blank when present"
+            );
+        }
+        this.runtimeConfigSnapshotId = runtimeConfigSnapshotId;
     }
 
     public AgentRunStatus getStatus() {

@@ -6,6 +6,7 @@ import com.multimodalAgent.agent.domain.UserAccount;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceException;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
+import com.multimodalAgent.agent.persistence.repository.AgentRuntimeConfigSnapshotRepository;
 import com.multimodalAgent.agent.repository.UserAccountRepository;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
@@ -77,6 +78,9 @@ class ProductionStreamingAgentExecutionTest {
     private AgentRunRepository runs;
 
     @Autowired
+    private AgentRuntimeConfigSnapshotRepository snapshots;
+
+    @Autowired
     private UserAccountRepository users;
 
     @Autowired
@@ -120,7 +124,9 @@ class ProductionStreamingAgentExecutionTest {
                 .jsonPath("$.stopReason").isEqualTo("COMPLETED")
                 .jsonPath("$.iterations").isEqualTo(1);
 
-        assertTrue(runs.findByRunId(runId).isPresent());
+        var persistedRun = runs.findByRunId(runId).orElseThrow();
+        assertNotNull(persistedRun.getRuntimeConfigSnapshotId());
+        assertTrue(snapshots.existsById(persistedRun.getRuntimeConfigSnapshotId()));
         assertFalse(hub.isOpen(runId));
     }
 

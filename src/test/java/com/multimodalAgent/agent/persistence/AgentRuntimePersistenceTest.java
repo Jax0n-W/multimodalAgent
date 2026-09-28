@@ -65,12 +65,17 @@ class AgentRuntimePersistenceTest {
                 SELECT COUNT(*)
                 FROM INFORMATION_SCHEMA.TABLES
                 WHERE UPPER(TABLE_SCHEMA) = 'PUBLIC'
-                  AND UPPER(TABLE_NAME) IN ('AGENT_RUNS', 'AGENT_STEPS', 'TOOL_EXECUTIONS')
+                  AND UPPER(TABLE_NAME) IN (
+                      'AGENT_RUNS',
+                      'AGENT_STEPS',
+                      'TOOL_EXECUTIONS',
+                      'AGENT_RUNTIME_CONFIG_SNAPSHOTS'
+                  )
                 """,
                 Integer.class
         );
 
-        assertEquals(3, tableCount);
+        assertEquals(4, tableCount);
     }
 
     @Test
