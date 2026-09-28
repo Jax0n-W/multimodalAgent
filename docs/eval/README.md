@@ -1,6 +1,22 @@
 # P9.4 Eval Harness
 
-The suite in `src/main/resources/eval/p9.4-runtime-suite.json` contains synthetic contract cases only. It measures Runtime behavior such as stop reasons, tool selection, call budgets, token completeness, typed failures, and latency. `contractPass` is not an answer-quality or task-success metric.
+The dataset is split into two versioned suites:
+
+- `src/main/resources/eval/p9.4-runtime-contract-suite.json` is the deterministic contract suite. It includes scripted budget and output-limit edge cases.
+- `src/main/resources/eval/p9.4-real-model-baseline-suite.json` selects the cases suitable for the opt-in Ollama baseline. It excludes mandatory output-limit and deterministic budget cases.
+
+Both suites use schema version `1.1.0`. Each case separates `execution` configuration from `oracle` constraints; execution budgets control Runtime and maximum expected calls evaluate observations. `contractPass` is not an answer-quality or task-success metric.
+
+Measurement semantics are fixed:
+
+- `modelCalls = count(MODEL_STARTED)`; telemetry is never a lifecycle-count fallback.
+- `toolRequests = count(TOOL_REQUESTED)`.
+- `toolCalls = count(TOOL_STARTED)`.
+- requested, started, succeeded, and failed tool lists come from their matching lifecycle events.
+- expected and forbidden tools are evaluated against requested tools.
+- `toolsUsed` is retained only as a compatibility/convenience field.
+
+EvalRunner V1 is strictly sequential: each case finishes and its case-scoped facts are collected before the next case starts. Deterministic scripted coverage maps `ModelFinishReason.LENGTH` to `MODEL_OUTPUT_LIMIT`; the real-model suite does not require Ollama to produce `LENGTH` reliably.
 
 Default verification is deterministic and performs no provider calls:
 
@@ -33,10 +49,12 @@ A Git SHA identifies committed source only. It cannot identify additional modifi
 - a non-blank Git SHA;
 - `sourceTreeState=CLEAN`;
 - suite ID and suite version;
-- complete, non-empty runtime config snapshot identities;
+- complete, non-empty durable runtime config snapshot identities read from persisted AgentRun rows;
 - model identity.
 
 A dirty-tree run must use `-Deval.sourceTreeState=DIRTY`; it remains a useful development result in `target/eval/`, but is not a formal reproducible baseline.
+
+For a formal real baseline, execution persists the snapshot, performs P6 durable AgentRun admission, runs the existing Runtime, and then reads `agent_runs.runtime_config_snapshot_id` into the Eval observation. A request-intercepted or otherwise non-durable snapshot ID cannot make a run fully reproducible.
 
 ## Comparator compatibility
 

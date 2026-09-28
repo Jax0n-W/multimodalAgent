@@ -1,0 +1,15 @@
+{
+  "suiteId": "p9.4-real-model-baseline-suite",
+  "suiteVersion": "1.1.0",
+  "caseIds": [
+    "direct-001", "direct-002", "direct-003", "direct-004",
+    "direct-005", "direct-006", "direct-007", "direct-008",
+    "knowledge-001", "knowledge-002", "knowledge-003", "knowledge-004",
+    "knowledge-005", "knowledge-006", "knowledge-007", "knowledge-008",
+    "no-search-001", "no-search-002", "no-search-003", "no-search-004",
+    "no-search-005",
+    "multi-turn-001", "multi-turn-002", "multi-turn-003", "multi-turn-004",
+    "multi-turn-005",
+    "forbidden-001", "forbidden-002", "forbidden-003", "forbidden-004"
+  ]
+}

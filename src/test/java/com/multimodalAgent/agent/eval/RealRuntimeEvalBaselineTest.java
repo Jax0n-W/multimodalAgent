@@ -7,14 +7,19 @@ import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatib
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingOptions;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.SpringWebClientOpenAiCompatibleStreamingClient;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.StreamingModelInvocationScope;
-import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshot;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotFactory;
-import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotStore;
 import com.multimodalAgent.agent.execution.config.ResolvedExecutionConfigResolver;
 import com.multimodalAgent.agent.execution.config.ResolvedModelConfig;
 import com.multimodalAgent.agent.execution.config.SnapshottingAgentExecutionCoordinator;
 import com.multimodalAgent.agent.harness.AgentExecutionCoordinator;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
+import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
+import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceComposition;
+import com.multimodalAgent.agent.persistence.integration.JpaExecutionConfigSnapshotStore;
+import com.multimodalAgent.agent.persistence.integration.JpaExecutionHistoryStore;
+import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
+import com.multimodalAgent.agent.persistence.repository.AgentStepRepository;
+import com.multimodalAgent.agent.persistence.repository.ToolExecutionRepository;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.AgentRunner;
@@ -37,6 +42,10 @@ import jakarta.validation.Validation;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.context.annotation.Import;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -49,10 +58,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -60,10 +66,32 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Opt-in P9.4 baseline against the already-running local Ollama endpoint. */
 @Tag("eval-real")
+@DataJpaTest(properties = {
+        "spring.datasource.url=jdbc:h2:mem:p9-real-eval;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+        "spring.datasource.username=sa",
+        "spring.datasource.password=",
+        "spring.datasource.driver-class-name=org.h2.Driver",
+        "spring.jpa.hibernate.ddl-auto=none",
+        "spring.flyway.enabled=true"
+})
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Import(JpaExecutionConfigSnapshotStore.class)
 class RealRuntimeEvalBaselineTest {
 
     private static final String DEFAULT_BASE_URL = "http://127.0.0.1:11434";
     private static final String DEFAULT_MODEL = "mindbridge-qwen2.5-7b-ft:latest";
+
+    @Autowired
+    private AgentRunRepository runRepository;
+
+    @Autowired
+    private AgentStepRepository stepRepository;
+
+    @Autowired
+    private ToolExecutionRepository toolExecutionRepository;
+
+    @Autowired
+    private JpaExecutionConfigSnapshotStore snapshotStore;
 
     @Test
     void writesObservedRuntimeBaseline() throws Exception {
@@ -72,7 +100,7 @@ class RealRuntimeEvalBaselineTest {
         assumeOllamaReady(baseUrl, modelName);
 
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
-        EvalSuite suite = new EvalDatasetLoader(objectMapper).loadDefault();
+        EvalSuite suite = new EvalDatasetLoader(objectMapper).loadRealModel();
         EvalExecutionTarget target = realRuntimeTarget(baseUrl, modelName, objectMapper);
         String gitSha = propertyOrEnvironment("eval.gitSha", "EVAL_GIT_SHA");
         EvalSourceTreeState sourceTreeState = EvalSourceTreeState.parse(
@@ -125,37 +153,41 @@ class RealRuntimeEvalBaselineTest {
                 new DefaultToolPolicyEngine(),
                 objectMapper
         );
+        JpaExecutionHistoryStore historyStore = new JpaExecutionHistoryStore(
+                runRepository, stepRepository, toolExecutionRepository
+        );
+        ExecutionPersistenceComposition persistence =
+                new ExecutionPersistenceComposition(historyStore);
         AgentRunner runner = new AgentRunner(
                 model,
                 tools,
                 new SpringAiModelToolDefinitionProjector(objectMapper),
-                events
+                event -> {
+                    persistence.eventPublisher().publish(event);
+                    events.publish(event);
+                }
         );
         AgentExecutionCoordinator core = new AgentExecutionCoordinator(
-                runner, new RuntimeMiddlewareChain(List.of(invocationScope))
+                runner, new RuntimeMiddlewareChain(List.of(
+                        invocationScope, persistence.boundaryMiddleware()
+                ))
         );
-        InMemorySnapshotStore snapshotStore = new InMemorySnapshotStore();
-        AtomicReference<String> currentSnapshotId = new AtomicReference<>();
         SnapshottingAgentExecutionCoordinator snapshotting =
                 new SnapshottingAgentExecutionCoordinator(
                         new ResolvedExecutionConfigResolver(modelConfig),
                         new ExecutionConfigSnapshotFactory(objectMapper),
                         snapshotStore,
-                        request -> {
-                            currentSnapshotId.set(request.runtimeConfigSnapshotId());
-                            return core.execute(request);
-                        }
+                        persistence.persistentCoordinator(core)::execute
                 );
         return new RuntimeEvalExecutionTarget("runtime-ollama", evalCase -> {
             events.clear();
             telemetry.clear();
-            currentSnapshotId.set(null);
             AgentRunSpec spec = new AgentRunSpec(
                     "eval-" + evalCase.caseId(),
                     "eval-" + evalCase.caseId(),
                     evalCase.messages(),
-                    evalCase.maxIterations(),
-                    evalCase.allowedTools(),
+                    evalCase.execution().maxIterations(),
+                    evalCase.execution().allowedTools(),
                     Set.of(),
                     budget(evalCase)
             );
@@ -163,11 +195,16 @@ class RealRuntimeEvalBaselineTest {
             AgentRunResult result = snapshotting.execute(new AgentExecutionRequest(
                     spec, "eval-request-" + evalCase.caseId(), 1L
             ));
+            AgentRunEntity durableRun = runRepository.findByRunId(spec.runId()).orElseThrow();
             return new RuntimeEvalExecutionTarget.Capture(
                     result,
                     events.events(),
                     List.copyOf(telemetry),
-                    currentSnapshotId.get(),
+                    durableRun.getRuntimeConfigSnapshotId() == null
+                            ? EvalSnapshotObservation.missing()
+                            : EvalSnapshotObservation.durableAgentRun(
+                                    durableRun.getRuntimeConfigSnapshotId()
+                            ),
                     null,
                     Duration.ofNanos(Math.max(0L, System.nanoTime() - started))
             );
@@ -176,11 +213,11 @@ class RealRuntimeEvalBaselineTest {
 
     private ExecutionBudget budget(EvalCase evalCase) {
         ExecutionBudget.Builder builder = ExecutionBudget.builder();
-        if (evalCase.maxModelCalls() != null) {
-            builder.maxModelCalls(evalCase.maxModelCalls());
+        if (evalCase.execution().budget().maxModelCalls() != null) {
+            builder.maxModelCalls(evalCase.execution().budget().maxModelCalls());
         }
-        if (evalCase.maxToolCalls() != null) {
-            builder.maxToolCalls(evalCase.maxToolCalls());
+        if (evalCase.execution().budget().maxToolCalls() != null) {
+            builder.maxToolCalls(evalCase.execution().budget().maxToolCalls());
         }
         return builder.build();
     }
@@ -266,18 +303,4 @@ class RealRuntimeEvalBaselineTest {
         }
     }
 
-    private static final class InMemorySnapshotStore implements ExecutionConfigSnapshotStore {
-
-        private final Map<String, ExecutionConfigSnapshot> snapshots = new ConcurrentHashMap<>();
-
-        @Override
-        public ExecutionConfigSnapshot persistIfAbsent(ExecutionConfigSnapshot snapshot) {
-            return snapshots.computeIfAbsent(snapshot.snapshotId(), ignored -> snapshot);
-        }
-
-        @Override
-        public Optional<ExecutionConfigSnapshot> findById(String snapshotId) {
-            return Optional.ofNullable(snapshots.get(snapshotId));
-        }
-    }
 }

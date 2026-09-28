@@ -2,8 +2,10 @@ package com.multimodalAgent.agent.eval;
 
 import com.multimodalAgent.agent.runtime.budget.ModelCostCalculator;
 import com.multimodalAgent.agent.runtime.event.ModelStartedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolFailedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolRequestedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolSucceededEvent;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
 
@@ -31,24 +33,35 @@ public final class EvalRecordFactory {
     }
 
     public EvalRecord create(EvalCase evalCase, EvalObservation observation) {
-        long modelCallsFromEvents = observation.events().stream()
+        long modelCalls = observation.events().stream()
                 .filter(ModelStartedEvent.class::isInstance)
                 .count();
-        long modelCalls = modelCallsFromEvents > 0
-                ? modelCallsFromEvents
-                : observation.modelTelemetry().size();
-        List<String> selectedTools = observation.events().stream()
+        List<String> requestedTools = observation.events().stream()
                 .filter(ToolRequestedEvent.class::isInstance)
                 .map(ToolRequestedEvent.class::cast)
                 .map(ToolRequestedEvent::toolName)
                 .toList();
-        long toolCalls = observation.events().stream()
+        List<String> startedTools = observation.events().stream()
                 .filter(ToolStartedEvent.class::isInstance)
-                .count();
+                .map(ToolStartedEvent.class::cast)
+                .map(ToolStartedEvent::toolName)
+                .toList();
+        List<String> succeededTools = observation.events().stream()
+                .filter(ToolSucceededEvent.class::isInstance)
+                .map(ToolSucceededEvent.class::cast)
+                .map(ToolSucceededEvent::toolName)
+                .toList();
+        List<String> failedTools = observation.events().stream()
+                .filter(ToolFailedEvent.class::isInstance)
+                .map(ToolFailedEvent.class::cast)
+                .map(ToolFailedEvent::toolName)
+                .toList();
+        long toolRequests = requestedTools.size();
+        long toolCalls = startedTools.size();
         EvalContractResult contract = contractEvaluator.evaluate(
                 evalCase,
                 observation.result().stopReason(),
-                selectedTools,
+                requestedTools,
                 modelCalls,
                 toolCalls
         );
@@ -75,6 +88,11 @@ public final class EvalRecordFactory {
                 contract.forbiddenToolViolations(),
                 observation.result().stopReason(),
                 toolsUsed,
+                toolRequests,
+                requestedTools,
+                startedTools,
+                succeededTools,
+                failedTools,
                 observation.result().iterations(),
                 modelCalls,
                 toolCalls,
@@ -86,7 +104,8 @@ public final class EvalRecordFactory {
                 estimatedCost == null ? CostStatus.UNKNOWN : CostStatus.KNOWN,
                 observation.latency().toMillis(),
                 failureKind,
-                observation.runtimeConfigSnapshotId()
+                observation.snapshotObservation().snapshotId(),
+                observation.snapshotObservation().provenance()
         );
     }
 }

@@ -49,6 +49,7 @@ public final class EvalMetricsAggregator {
                 rate(records, EvalRecord::toolSelectionCorrect),
                 records.stream().mapToLong(EvalRecord::forbiddenToolViolations).sum(),
                 average(records.stream().mapToLong(EvalRecord::modelCalls).sum(), count),
+                average(records.stream().mapToLong(EvalRecord::toolRequests).sum(), count),
                 average(records.stream().mapToLong(EvalRecord::toolCalls).sum(), count),
                 average(records.stream().mapToLong(EvalRecord::iterations).sum(), count),
                 totalInput,

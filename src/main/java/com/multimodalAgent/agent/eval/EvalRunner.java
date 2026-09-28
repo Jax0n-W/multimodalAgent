@@ -49,10 +49,10 @@ public final class EvalRunner {
         for (EvalCase evalCase : suite.cases()) {
             EvalObservation observation = target.execute(evalCase);
             records.add(recordFactory.create(evalCase, observation));
-            if (observation.runtimeConfigSnapshotId() == null) {
+            if (!observation.snapshotObservation().isDurable()) {
                 snapshotMissing = true;
             } else {
-                snapshots.add(observation.runtimeConfigSnapshotId());
+                snapshots.add(observation.snapshotObservation().snapshotId());
             }
             observation.modelTelemetry().forEach(telemetry -> modelIdentities.add(
                     telemetry.identity().provider() + "/" + telemetry.identity().model()

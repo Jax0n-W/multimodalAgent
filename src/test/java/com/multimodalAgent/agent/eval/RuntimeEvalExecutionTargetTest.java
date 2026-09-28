@@ -43,12 +43,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RuntimeEvalExecutionTargetTest {
 
     @Test
-    void observesExistingCoordinatorEventsAndSnapshotWithoutAnotherAgentLoop() {
+    void observesExistingCoordinatorEventsAndMarksInterceptedSnapshotNonDurable() {
         EvalCase evalCase = new EvalCase(
                 "runtime-001", "1", "direct_answer",
                 List.of(AgentMessage.user("answer directly")),
-                AgentStopReason.COMPLETED, Set.of(), Set.of(), Set.of(),
-                2, 1L, 0L
+                new EvalExecutionConfig(2, Set.of(), new EvalExecutionBudget(1L, 0L)),
+                new EvalOracle(AgentStopReason.COMPLETED, Set.of(), Set.of(), 1L, 0L)
         );
         RuntimeEvalExecutionTarget target = new RuntimeEvalExecutionTarget(
                 "runtime",
@@ -62,9 +62,43 @@ class RuntimeEvalExecutionTargetTest {
         assertEquals(1, record.modelCalls());
         assertEquals(0, record.toolCalls());
         assertNotNull(record.runtimeConfigSnapshotId());
+        assertEquals(EvalSnapshotProvenance.NON_DURABLE,
+                record.runtimeConfigSnapshotProvenance());
+    }
+
+    @Test
+    void deterministicScriptedLengthTurnProducesOutputLimitContractFact() {
+        EvalCase evalCase = new EvalCase(
+                "length-001", "1", "output_limit",
+                List.of(AgentMessage.user("emit deterministic length")),
+                new EvalExecutionConfig(2, Set.of(), new EvalExecutionBudget(1L, 0L)),
+                new EvalOracle(AgentStopReason.MODEL_OUTPUT_LIMIT,
+                        Set.of(), Set.of(), 1L, 0L)
+        );
+
+        EvalRecord record = new EvalRecordFactory().create(
+                evalCase,
+                new RuntimeEvalExecutionTarget(
+                        "runtime",
+                        ignored -> executeExistingRuntime(
+                                evalCase, ModelTurn.outputLimit("partial")
+                        )
+                ).execute(evalCase)
+        );
+
+        assertTrue(record.contractPass());
+        assertEquals(AgentStopReason.MODEL_OUTPUT_LIMIT, record.stopReason());
+        assertEquals(1, record.modelCalls());
     }
 
     private RuntimeEvalExecutionTarget.Capture executeExistingRuntime(EvalCase evalCase) {
+        return executeExistingRuntime(evalCase, ModelTurn.finalAnswer("done"));
+    }
+
+    private RuntimeEvalExecutionTarget.Capture executeExistingRuntime(
+            EvalCase evalCase,
+            ModelTurn turn
+    ) {
         ObjectMapper objectMapper = new ObjectMapper();
         RecordingAgentEventPublisher events = new RecordingAgentEventPublisher();
         ToolExecutor toolExecutor = new ToolExecutor(
@@ -77,7 +111,7 @@ class RuntimeEvalExecutionTargetTest {
                 objectMapper
         );
         AgentRunner runner = new AgentRunner(
-                new ScriptedAgentModel(ModelTurn.finalAnswer("done")),
+                new ScriptedAgentModel(turn),
                 toolExecutor,
                 TestModelToolDefinitionProjector.INSTANCE,
                 events
@@ -121,8 +155,8 @@ class RuntimeEvalExecutionTargetTest {
                 "eval-" + evalCase.caseId(),
                 "eval-suite",
                 evalCase.messages(),
-                evalCase.maxIterations(),
-                evalCase.allowedTools(),
+                evalCase.execution().maxIterations(),
+                evalCase.execution().allowedTools(),
                 Set.of()
         );
         long started = System.nanoTime();
@@ -135,7 +169,7 @@ class RuntimeEvalExecutionTargetTest {
                 result,
                 events.events(),
                 List.of(),
-                delegatedSnapshotId.get(),
+                EvalSnapshotObservation.nonDurable(delegatedSnapshotId.get()),
                 null,
                 Duration.ofNanos(System.nanoTime() - started)
         );

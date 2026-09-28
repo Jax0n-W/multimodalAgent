@@ -20,16 +20,17 @@ public final class EvalContractEvaluator {
         Objects.requireNonNull(actualStopReason, "actualStopReason must not be null");
         Objects.requireNonNull(selectedTools, "selectedTools must not be null");
         Set<String> selectedToolSet = Set.copyOf(selectedTools);
+        EvalOracle oracle = evalCase.oracle();
         int forbiddenViolations = Math.toIntExact(selectedTools.stream()
-                .filter(evalCase.forbiddenTools()::contains)
+                .filter(oracle.forbiddenTools()::contains)
                 .count());
-        boolean expectedToolsSatisfied = selectedToolSet.containsAll(evalCase.expectedTools());
+        boolean expectedToolsSatisfied = selectedToolSet.containsAll(oracle.expectedTools());
         boolean toolSelectionCorrect = expectedToolsSatisfied && forbiddenViolations == 0;
-        boolean stopReasonMatch = actualStopReason == evalCase.expectedStopReason();
-        boolean modelCallConstraintMatch = evalCase.maxModelCalls() == null
-                || modelCalls <= evalCase.maxModelCalls();
-        boolean toolCallConstraintMatch = evalCase.maxToolCalls() == null
-                || toolCalls <= evalCase.maxToolCalls();
+        boolean stopReasonMatch = actualStopReason == oracle.expectedStopReason();
+        boolean modelCallConstraintMatch = oracle.maxExpectedModelCalls() == null
+                || modelCalls <= oracle.maxExpectedModelCalls();
+        boolean toolCallConstraintMatch = oracle.maxExpectedToolCalls() == null
+                || toolCalls <= oracle.maxExpectedToolCalls();
         return new EvalContractResult(
                 stopReasonMatch
                         && toolSelectionCorrect

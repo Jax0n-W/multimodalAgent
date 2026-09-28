@@ -16,13 +16,17 @@ P9.4 adds a thin evaluation layer:
 
 `EvalExecutionTarget` is only an adapter boundary. The Runtime target invokes the existing coordinator and observes its result, events, model telemetry, snapshot identity, and elapsed time. It does not reproduce routing, tool execution, budgets, or stop-reason mapping. A future legacy target may implement the same boundary, but no legacy evaluator is implemented in this phase.
 
-The checked-in suite is versioned synthetic data. A case declares a deterministic contract: expected stop reason, allowed/expected/forbidden tools, and optional model/tool call bounds. `contractPass` means those observable constraints passed. It is explicitly not semantic answer correctness or task success.
+The checked-in dataset is versioned synthetic data with separate execution and oracle objects. Execution configuration (`maxIterations`, `allowedTools`, and execution budgets) controls Runtime. Oracle constraints (`expectedStopReason`, expected/forbidden tools, and maximum expected calls) evaluate the observed run. The two sets of call limits are intentionally independent. `contractPass` means those observable constraints passed. It is explicitly not semantic answer correctness or task success.
 
-Default Maven tests exclude the `eval-real` tag and make no external provider calls. The `eval-real` profile is opt-in and may produce `target/eval/eval-results.json`, `eval-summary.json`, and `eval-report.md`. Real runs are descriptive baselines: P9.4 defines deltas but no nondeterministic pass/fail threshold.
+Lifecycle metrics have one source each: `modelCalls` counts `MODEL_STARTED`, `toolRequests` counts `TOOL_REQUESTED`, and `toolCalls` counts `TOOL_STARTED`. Requested, started, succeeded, and failed tool names are recorded independently from their corresponding lifecycle events. Expected and forbidden tool evaluation uses requested tools. `AgentRunResult.toolsUsed` remains only a compatibility field and is not an oracle or core metric source. Model telemetry is used for provider failure kind, model identity, usage, and latency observation; it is not a fallback lifecycle counter.
+
+Default Maven tests exclude the `eval-real` tag and make no external provider calls. The deterministic contract suite covers budgets and scripted `ModelFinishReason.LENGTH -> MODEL_OUTPUT_LIMIT`. The separate real-model suite covers direct answers, normal tool selection, multi-turn context, and normal completion; it does not require Ollama to produce deterministic `LENGTH`. The `eval-real` profile is opt-in and may produce `target/eval/eval-results.json`, `eval-summary.json`, and `eval-report.md`. Real runs are descriptive baselines: P9.4 defines deltas but no nondeterministic pass/fail threshold.
 
 Reproducibility metadata records the Git SHA, explicitly injected source-tree state, suite identity/version, generation time, target, runtime snapshot identities, and model identities. A Git SHA identifies only committed source. When the working tree is dirty, HEAD does not fully identify the Eval harness, dataset, metrics, comparator, or report generator that actually ran. Eval does not inspect Git, hash the source tree, or reconstruct provenance; the baseline runner receives `CLEAN`, `DIRTY`, or `UNKNOWN` through external configuration.
 
-`fullyReproducible` is true only when the Git SHA is present, the injected source-tree state is `CLEAN`, suite ID/version are present, at least one actual runtime snapshot identity is present with none missing, and model identity is present. Missing or dirty provenance is reported explicitly rather than inferred from a SHA.
+`fullyReproducible` is true only when the Git SHA is present, the injected source-tree state is `CLEAN`, suite ID/version are present, every case has a durable runtime snapshot identity, and model identity is present. Formal snapshot provenance is read from the persisted `AgentRun.runtimeConfigSnapshotId` after durable admission and execution. A snapshot ID intercepted from an execution request is explicitly non-durable and cannot satisfy this gate. Missing, non-durable, or dirty provenance is reported rather than inferred from a SHA.
+
+EvalRunner V1 executes cases strictly and synchronously in dataset order. Each case completes and its case-scoped facts are collected before the next case begins. Parallel evaluation and telemetry correlation changes are outside P9.4.
 
 Baseline comparison first requires identical suite ID, suite version, and case-ID set. Case order does not matter. An incompatible dataset produces the typed `INCOMPATIBLE_BASELINE` failure and no deltas. Different Git revisions, model identities, runtime snapshots, token usage, costs, and latency remain intentionally comparable when the dataset contract is identical.
 
@@ -33,5 +37,6 @@ Incomplete token usage is represented as unknown, never as zero. Cost is reporte
 - Evaluation exercises the production execution semantics without introducing another Agent loop.
 - CI remains deterministic and offline by default.
 - Real-model results can vary and must be interpreted as observed baseline data.
+- Request interception may support focused unit tests, but cannot establish formal baseline provenance.
 - A dirty-tree real run is a development artifact, not a formal reproducible baseline.
 - P11 product/semantic claims and P12 threshold policy remain out of scope.

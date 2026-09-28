@@ -13,7 +13,8 @@ import java.util.Set;
 /** Loads the checked-in synthetic P9.4 dataset; it never reads student data. */
 public final class EvalDatasetLoader {
 
-    public static final String DEFAULT_RESOURCE = "/eval/p9.4-runtime-suite.json";
+    public static final String CONTRACT_RESOURCE = "/eval/p9.4-runtime-contract-suite.json";
+    public static final String REAL_MODEL_RESOURCE = "/eval/p9.4-real-model-baseline-suite.json";
 
     private final ObjectMapper objectMapper;
 
@@ -22,9 +23,32 @@ public final class EvalDatasetLoader {
     }
 
     public EvalSuite loadDefault() throws IOException {
+        return loadResource(CONTRACT_RESOURCE);
+    }
+
+    public EvalSuite loadRealModel() throws IOException {
+        EvalSuite contractSuite = loadDefault();
+        RealSuiteManifest manifest;
         try (InputStream input = Objects.requireNonNull(
-                EvalDatasetLoader.class.getResourceAsStream(DEFAULT_RESOURCE),
-                "Missing eval dataset: " + DEFAULT_RESOURCE
+                EvalDatasetLoader.class.getResourceAsStream(REAL_MODEL_RESOURCE),
+                "Missing eval dataset: " + REAL_MODEL_RESOURCE
+        )) {
+            manifest = objectMapper.readValue(input, RealSuiteManifest.class);
+        }
+        java.util.Map<String, EvalCase> byId = contractSuite.cases().stream()
+                .collect(java.util.stream.Collectors.toMap(EvalCase::caseId, value -> value));
+        List<EvalCase> cases = manifest.caseIds().stream()
+                .map(caseId -> Objects.requireNonNull(
+                        byId.get(caseId), "Unknown real-model caseId: " + caseId
+                ))
+                .toList();
+        return new EvalSuite(manifest.suiteId(), manifest.suiteVersion(), cases);
+    }
+
+    private EvalSuite loadResource(String resource) throws IOException {
+        try (InputStream input = Objects.requireNonNull(
+                EvalDatasetLoader.class.getResourceAsStream(resource),
+                "Missing eval dataset: " + resource
         )) {
             return load(input);
         }
@@ -43,13 +67,27 @@ public final class EvalDatasetLoader {
                 source.caseVersion(),
                 source.category(),
                 source.messages().stream().map(this::toMessage).toList(),
-                source.expectedStopReason(),
-                set(source.allowedTools()),
-                set(source.expectedTools()),
-                set(source.forbiddenTools()),
-                source.maxIterations() == null ? 3 : source.maxIterations(),
-                source.maxModelCalls(),
-                source.maxToolCalls()
+                new EvalExecutionConfig(
+                        source.execution().maxIterations() == null
+                                ? 3
+                                : source.execution().maxIterations(),
+                        set(source.execution().allowedTools()),
+                        new EvalExecutionBudget(
+                                source.execution().budget() == null
+                                        ? null
+                                        : source.execution().budget().maxModelCalls(),
+                                source.execution().budget() == null
+                                        ? null
+                                        : source.execution().budget().maxToolCalls()
+                        )
+                ),
+                new EvalOracle(
+                        source.oracle().expectedStopReason(),
+                        set(source.oracle().expectedTools()),
+                        set(source.oracle().forbiddenTools()),
+                        source.oracle().maxExpectedModelCalls(),
+                        source.oracle().maxExpectedToolCalls()
+                )
         );
     }
 
@@ -80,16 +118,37 @@ public final class EvalDatasetLoader {
             String caseVersion,
             String category,
             List<DatasetMessage> messages,
-            AgentStopReason expectedStopReason,
+            DatasetExecution execution,
+            DatasetOracle oracle
+    ) {
+    }
+
+    private record DatasetExecution(
+            Integer maxIterations,
             List<String> allowedTools,
+            DatasetBudget budget
+    ) {
+    }
+
+    private record DatasetBudget(Long maxModelCalls, Long maxToolCalls) {
+    }
+
+    private record DatasetOracle(
+            AgentStopReason expectedStopReason,
             List<String> expectedTools,
             List<String> forbiddenTools,
-            Integer maxIterations,
-            Long maxModelCalls,
-            Long maxToolCalls
+            Long maxExpectedModelCalls,
+            Long maxExpectedToolCalls
     ) {
     }
 
     private record DatasetMessage(String role, String content) {
+    }
+
+    private record RealSuiteManifest(
+            String suiteId,
+            String suiteVersion,
+            List<String> caseIds
+    ) {
     }
 }

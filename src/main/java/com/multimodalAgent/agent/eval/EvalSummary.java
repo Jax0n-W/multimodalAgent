@@ -10,6 +10,7 @@ public record EvalSummary(
         BigDecimal toolSelectionCorrectRate,
         long forbiddenToolViolationCount,
         BigDecimal avgModelCalls,
+        BigDecimal avgToolRequests,
         BigDecimal avgToolCalls,
         BigDecimal avgIterations,
         Long totalInputTokens,

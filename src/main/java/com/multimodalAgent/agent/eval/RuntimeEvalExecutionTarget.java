@@ -42,7 +42,7 @@ public final class RuntimeEvalExecutionTarget implements EvalExecutionTarget {
                 capture.result(),
                 capture.events(),
                 capture.modelTelemetry(),
-                capture.runtimeConfigSnapshotId(),
+                capture.snapshotObservation(),
                 capture.pricing(),
                 capture.latency()
         );
@@ -52,7 +52,7 @@ public final class RuntimeEvalExecutionTarget implements EvalExecutionTarget {
             AgentRunResult result,
             List<AgentEvent> events,
             List<ModelInvocationTelemetry> modelTelemetry,
-            String runtimeConfigSnapshotId,
+            EvalSnapshotObservation snapshotObservation,
             ModelPricing pricing,
             Duration latency
     ) {
@@ -63,6 +63,7 @@ public final class RuntimeEvalExecutionTarget implements EvalExecutionTarget {
             modelTelemetry = List.copyOf(Objects.requireNonNull(
                     modelTelemetry, "modelTelemetry must not be null"
             ));
+            Objects.requireNonNull(snapshotObservation, "snapshotObservation must not be null");
             Objects.requireNonNull(latency, "latency must not be null");
         }
     }

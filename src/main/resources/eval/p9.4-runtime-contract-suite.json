@@ -1,0 +1,222 @@
+{
+  "suiteId": "p9.4-runtime-contract-suite",
+  "suiteVersion": "1.1.0",
+  "cases": [
+    {
+      "caseId": "direct-001", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "Reply with one short sentence: what is two plus two?"}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "direct-002", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "Say hello in a calm and friendly tone."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "direct-003", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "List two simple ways to take a short study break."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "direct-004", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "用一句话解释什么是深呼吸。"}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "direct-005", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "Give a concise encouraging sentence before an exam."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "direct-006", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "What day comes after Monday? Answer directly."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "direct-007", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "Provide one neutral journaling prompt."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "direct-008", "caseVersion": "1", "category": "direct_answer",
+      "messages": [{"role": "user", "content": "Answer yes or no: is sleep useful for concentration?"}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "knowledge-001", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "Use knowledge_search to find the synthetic campus counseling office hours, then summarize them."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "knowledge-002", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "Call knowledge_search for the synthetic library quiet-room policy and answer from its result."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "knowledge-003", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "You must use knowledge_search once to locate the synthetic peer-support schedule."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "knowledge-004", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "请调用 knowledge_search 查询合成数据中的校园心理中心预约方式。"}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "knowledge-005", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "Use the available knowledge_search tool for the synthetic exam-week support location."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "knowledge-006", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "Find the synthetic student wellness workshop date with knowledge_search."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "knowledge-007", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "Call knowledge_search for the synthetic after-hours support contact and report it."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "knowledge-008", "caseVersion": "1", "category": "knowledge_search_needed",
+      "messages": [{"role": "user", "content": "Use knowledge_search to retrieve the synthetic mindfulness room location."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "no-search-001", "caseVersion": "1", "category": "knowledge_search_not_needed",
+      "messages": [{"role": "user", "content": "Without tools, calculate 5 + 7."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "no-search-002", "caseVersion": "1", "category": "knowledge_search_not_needed",
+      "messages": [{"role": "user", "content": "Do not search. Give one breathing reminder."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "no-search-003", "caseVersion": "1", "category": "knowledge_search_not_needed",
+      "messages": [{"role": "user", "content": "Answer from common knowledge only: name a primary color."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "no-search-004", "caseVersion": "1", "category": "knowledge_search_not_needed",
+      "messages": [{"role": "user", "content": "无需检索，用一句话提醒我喝水。"}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "no-search-005", "caseVersion": "1", "category": "knowledge_search_not_needed",
+      "messages": [{"role": "user", "content": "No tool is necessary. Write a five-word greeting."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "multi-turn-001", "caseVersion": "1", "category": "multi_turn_context",
+      "messages": [{"role": "user", "content": "My preferred study block is 25 minutes."}, {"role": "assistant", "content": "Understood."}, {"role": "user", "content": "Repeat the duration I just gave you without searching."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "multi-turn-002", "caseVersion": "1", "category": "multi_turn_context",
+      "messages": [{"role": "user", "content": "Call me Alex in this synthetic conversation."}, {"role": "assistant", "content": "Okay."}, {"role": "user", "content": "What name should you use?"}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "multi-turn-003", "caseVersion": "1", "category": "multi_turn_context",
+      "messages": [{"role": "user", "content": "We are discussing a synthetic campus resource."}, {"role": "assistant", "content": "Which resource?"}, {"role": "user", "content": "Use knowledge_search for the counseling office hours."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "multi-turn-004", "caseVersion": "1", "category": "multi_turn_context",
+      "messages": [{"role": "user", "content": "The synthetic code word is bluebird."}, {"role": "assistant", "content": "Noted."}, {"role": "user", "content": "State the code word only."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "multi-turn-005", "caseVersion": "1", "category": "multi_turn_context",
+      "messages": [{"role": "user", "content": "I asked about a synthetic workshop."}, {"role": "assistant", "content": "I can look it up."}, {"role": "user", "content": "Please use knowledge_search now."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 2, "maxToolCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "expectedTools": ["knowledge_search"], "maxExpectedModelCalls": 2, "maxExpectedToolCalls": 1}
+    },
+    {
+      "caseId": "forbidden-001", "caseVersion": "1", "category": "tool_forbidden",
+      "messages": [{"role": "user", "content": "Answer generally without any tool: what is a study break?"}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "forbidden-002", "caseVersion": "1", "category": "tool_forbidden",
+      "messages": [{"role": "user", "content": "No tools are allowed. Give a short neutral response."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "forbidden-003", "caseVersion": "1", "category": "tool_forbidden",
+      "messages": [{"role": "user", "content": "请不要调用工具，直接说一句鼓励的话。"}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "forbidden-004", "caseVersion": "1", "category": "tool_forbidden",
+      "messages": [{"role": "user", "content": "Respond directly with the number ten; no lookup."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "COMPLETED", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "model-budget-001", "caseVersion": "1", "category": "model_call_budget",
+      "messages": [{"role": "user", "content": "This case must be blocked before the model starts."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 0}},
+      "oracle": {"expectedStopReason": "BUDGET_EXHAUSTED", "maxExpectedModelCalls": 0}
+    },
+    {
+      "caseId": "model-budget-002", "caseVersion": "1", "category": "model_call_budget",
+      "messages": [{"role": "user", "content": "Budget guard should prevent this synthetic invocation."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 0}},
+      "oracle": {"expectedStopReason": "BUDGET_EXHAUSTED", "maxExpectedModelCalls": 0}
+    },
+    {
+      "caseId": "tool-budget-001", "caseVersion": "1", "category": "tool_call_budget",
+      "messages": [{"role": "user", "content": "Call knowledge_search for synthetic office hours."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 1, "maxToolCalls": 0}},
+      "oracle": {"expectedStopReason": "BUDGET_EXHAUSTED", "maxExpectedModelCalls": 1, "maxExpectedToolCalls": 0}
+    },
+    {
+      "caseId": "tool-budget-002", "caseVersion": "1", "category": "tool_call_budget",
+      "messages": [{"role": "user", "content": "You must use knowledge_search for the synthetic schedule."}],
+      "execution": {"maxIterations": 3, "allowedTools": ["knowledge_search"], "budget": {"maxModelCalls": 1, "maxToolCalls": 0}},
+      "oracle": {"expectedStopReason": "BUDGET_EXHAUSTED", "maxExpectedModelCalls": 1, "maxExpectedToolCalls": 0}
+    },
+    {
+      "caseId": "output-limit-001", "caseVersion": "1", "category": "output_limit",
+      "messages": [{"role": "user", "content": "Deterministic target returns a scripted LENGTH finish reason."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "MODEL_OUTPUT_LIMIT", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    },
+    {
+      "caseId": "output-limit-002", "caseVersion": "1", "category": "output_limit",
+      "messages": [{"role": "user", "content": "Deterministic target returns another scripted LENGTH finish reason."}],
+      "execution": {"maxIterations": 3, "allowedTools": [], "budget": {"maxModelCalls": 1}},
+      "oracle": {"expectedStopReason": "MODEL_OUTPUT_LIMIT", "forbiddenTools": ["knowledge_search"], "maxExpectedModelCalls": 1}
+    }
+  ]
+}

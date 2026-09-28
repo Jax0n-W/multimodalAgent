@@ -4,12 +4,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
+import com.multimodalAgent.agent.runtime.budget.BudgetBlock;
+import com.multimodalAgent.agent.runtime.budget.BudgetBlockReason;
+import com.multimodalAgent.agent.runtime.budget.BudgetDimension;
 import com.multimodalAgent.agent.runtime.budget.ModelPricing;
 import com.multimodalAgent.agent.runtime.event.AgentEvent;
 import com.multimodalAgent.agent.runtime.event.AgentEventMetadata;
+import com.multimodalAgent.agent.runtime.event.BudgetBlockedEvent;
 import com.multimodalAgent.agent.runtime.event.ModelStartedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolFailedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolRequestedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
+import com.multimodalAgent.agent.runtime.event.ToolSucceededEvent;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
@@ -17,6 +23,7 @@ import com.multimodalAgent.agent.runtime.model.TokenUsageStatus;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationTelemetry;
+import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -29,6 +36,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,8 +53,8 @@ class EvalHarnessTest {
     void loadsVersionedSyntheticDatasetWithRequiredCoverage() throws Exception {
         EvalSuite suite = new EvalDatasetLoader(new ObjectMapper()).loadDefault();
 
-        assertEquals("p9.4-runtime-synthetic", suite.suiteId());
-        assertEquals("1.0.0", suite.suiteVersion());
+        assertEquals("p9.4-runtime-contract-suite", suite.suiteId());
+        assertEquals("1.1.0", suite.suiteVersion());
         assertEquals(36, suite.cases().size());
         assertEquals(36, suite.cases().stream().map(EvalCase::caseId).distinct().count());
         assertEquals(Set.of(
@@ -63,17 +71,46 @@ class EvalHarnessTest {
     }
 
     @Test
+    void realModelSuiteExcludesDeterministicBudgetAndOutputLimitContracts() throws Exception {
+        EvalSuite suite = new EvalDatasetLoader(new ObjectMapper()).loadRealModel();
+
+        assertEquals("p9.4-real-model-baseline-suite", suite.suiteId());
+        assertEquals("1.1.0", suite.suiteVersion());
+        assertEquals(30, suite.cases().size());
+        assertTrue(suite.cases().stream().noneMatch(evalCase -> Set.of(
+                "model_call_budget", "tool_call_budget", "output_limit"
+        ).contains(evalCase.category())));
+    }
+
+    @Test
     void rejectsInconsistentCaseContracts() {
         assertThrows(IllegalArgumentException.class, () -> new EvalCase(
                 "bad", "1", "test", List.of(AgentMessage.user("hello")),
-                AgentStopReason.COMPLETED, Set.of(), Set.of("knowledge_search"),
-                Set.of(), 1, null, null
+                new EvalExecutionConfig(1, Set.of(), EvalExecutionBudget.UNLIMITED),
+                new EvalOracle(AgentStopReason.COMPLETED, Set.of("knowledge_search"),
+                        Set.of(), null, null)
         ));
         assertThrows(IllegalArgumentException.class, () -> new EvalCase(
                 "bad", "1", "test", List.of(AgentMessage.user("hello")),
-                AgentStopReason.COMPLETED, Set.of("knowledge_search"),
-                Set.of("knowledge_search"), Set.of("knowledge_search"), 1, null, null
+                new EvalExecutionConfig(1, Set.of("knowledge_search"),
+                        EvalExecutionBudget.UNLIMITED),
+                new EvalOracle(AgentStopReason.COMPLETED, Set.of("knowledge_search"),
+                        Set.of("knowledge_search"), null, null)
         ));
+    }
+
+    @Test
+    void executionBudgetAndOracleConstraintAreIndependent() {
+        EvalCase evalCase = new EvalCase(
+                "independent", "1", "fixture", List.of(AgentMessage.user("fixture")),
+                new EvalExecutionConfig(3, Set.of(), new EvalExecutionBudget(1L, 0L)),
+                new EvalOracle(AgentStopReason.COMPLETED, Set.of(), Set.of(), 2L, 1L)
+        );
+
+        assertEquals(1L, evalCase.execution().budget().maxModelCalls());
+        assertEquals(2L, evalCase.oracle().maxExpectedModelCalls());
+        assertEquals(0L, evalCase.execution().budget().maxToolCalls());
+        assertEquals(1L, evalCase.oracle().maxExpectedToolCalls());
     }
 
     @Test
@@ -121,8 +158,10 @@ class EvalHarnessTest {
         );
 
         assertEquals(1, record.modelCalls());
+        assertEquals(1, record.toolRequests());
         assertEquals(1, record.toolCalls());
-        assertEquals(List.of("knowledge_search"), record.toolsUsed());
+        assertEquals(List.of("knowledge_search"), record.requestedTools());
+        assertEquals(List.of("knowledge_search"), record.startedTools());
         assertEquals(TokenUsageStatus.UNKNOWN_OR_INCOMPLETE, record.tokenUsageStatus());
         assertNull(record.inputTokens());
         assertNull(record.outputTokens());
@@ -133,10 +172,78 @@ class EvalHarnessTest {
     }
 
     @Test
-    void toolSelectionUsesRequestedEventWhileToolCallCountUsesStartedEvent() {
+    void modelCallCountUsesOnlyModelStartedEvents() {
+        EvalRecord record = new EvalRecordFactory().create(
+                evalCase(Set.of(), Set.of(), Set.of(), 0L, 0L),
+                observation(TokenUsage.UNKNOWN, List.of(),
+                        List.of(telemetry(TokenUsage.UNKNOWN, null)), null)
+        );
+
+        assertEquals(0, record.modelCalls());
+    }
+
+    @Test
+    void toolLifecycleFactsRemainDistinct() {
+        EvalRecord requestedOnly = new EvalRecordFactory().create(
+                evalCase(Set.of("knowledge_search"), Set.of("knowledge_search"),
+                        Set.of(), 1L, 0L),
+                observation(TokenUsage.UNKNOWN,
+                        List.of(modelStarted(1), toolRequested(2, "knowledge_search")),
+                        List.of(), null)
+        );
+        EvalRecord succeeded = new EvalRecordFactory().create(
+                evalCase(Set.of("knowledge_search"), Set.of("knowledge_search"),
+                        Set.of(), 1L, 1L),
+                observation(TokenUsage.UNKNOWN, List.of(
+                        modelStarted(1), toolRequested(2, "knowledge_search"),
+                        toolStarted(3, "knowledge_search"),
+                        toolSucceeded(4, "knowledge_search")
+                ), List.of(), null)
+        );
+        EvalRecord failed = new EvalRecordFactory().create(
+                evalCase(Set.of("knowledge_search"), Set.of("knowledge_search"),
+                        Set.of(), 1L, 1L),
+                observation(TokenUsage.UNKNOWN, List.of(
+                        modelStarted(1), toolRequested(2, "knowledge_search"),
+                        toolStarted(3, "knowledge_search"),
+                        toolFailed(4, "knowledge_search")
+                ), List.of(), null)
+        );
+
+        assertEquals(1, requestedOnly.toolRequests());
+        assertEquals(0, requestedOnly.toolCalls());
+        assertEquals(List.of("knowledge_search"), requestedOnly.requestedTools());
+        assertTrue(requestedOnly.startedTools().isEmpty());
+        assertEquals(List.of("knowledge_search"), succeeded.succeededTools());
+        assertTrue(succeeded.failedTools().isEmpty());
+        assertEquals(List.of("knowledge_search"), failed.failedTools());
+        assertTrue(failed.succeededTools().isEmpty());
+        EvalSummary summary = new EvalMetricsAggregator().aggregate(
+                List.of(requestedOnly, succeeded, failed)
+        );
+        assertEquals(new BigDecimal("1.000000"), summary.avgToolRequests());
+        assertEquals(new BigDecimal("0.666667"), summary.avgToolCalls());
+    }
+
+    @Test
+    void requestedButBudgetBlockedToolCountsAsRequestAndNotAsCall() {
         EvalObservation observation = observation(
                 TokenUsage.UNKNOWN,
-                List.of(modelStarted(1), toolRequested(2, "unsafe_tool")),
+                List.of(
+                        modelStarted(1),
+                        toolRequested(2, "unsafe_tool"),
+                        BudgetBlockedEvent.forTool(
+                                metadata(3, 1),
+                                new BudgetBlock(
+                                        BudgetDimension.TOOL_CALLS,
+                                        BudgetBlockReason.EXHAUSTED,
+                                        BigDecimal.ZERO,
+                                        java.util.Optional.of(BigDecimal.ZERO)
+                                ),
+                                "call-2",
+                                "unsafe_tool"
+                        )
+                ),
                 List.of(telemetry(TokenUsage.UNKNOWN, null)),
                 null
         );
@@ -149,6 +256,7 @@ class EvalHarnessTest {
         assertFalse(record.contractPass());
         assertFalse(record.toolSelectionCorrect());
         assertEquals(1, record.forbiddenToolViolations());
+        assertEquals(1, record.toolRequests());
         assertEquals(0, record.toolCalls());
     }
 
@@ -198,11 +306,14 @@ class EvalHarnessTest {
                 timedOut.caseId(), timedOut.category(), timedOut.contractPass(),
                 timedOut.stopReasonMatch(), timedOut.toolSelectionCorrect(),
                 timedOut.forbiddenToolViolations(), timedOut.stopReason(),
-                timedOut.toolsUsed(), timedOut.iterations(), timedOut.modelCalls(),
-                timedOut.toolCalls(), timedOut.inputTokens(), timedOut.outputTokens(),
+                timedOut.toolsUsed(), timedOut.toolRequests(), timedOut.requestedTools(),
+                timedOut.startedTools(), timedOut.succeededTools(), timedOut.failedTools(),
+                timedOut.iterations(), timedOut.modelCalls(), timedOut.toolCalls(),
+                timedOut.inputTokens(), timedOut.outputTokens(),
                 timedOut.totalTokens(), timedOut.tokenUsageStatus(),
                 timedOut.estimatedCost(), timedOut.costStatus(), timedOut.latencyMillis(),
-                ModelFailureKind.TIMEOUT, timedOut.runtimeConfigSnapshotId()
+                ModelFailureKind.TIMEOUT, timedOut.runtimeConfigSnapshotId(),
+                timedOut.runtimeConfigSnapshotProvenance()
         );
 
         EvalSummary summary = new EvalMetricsAggregator().aggregate(List.of(
@@ -289,7 +400,9 @@ class EvalHarnessTest {
                         result(TokenUsage.UNKNOWN),
                         List.of(modelStarted(1)),
                         List.of(telemetry(TokenUsage.UNKNOWN, null)),
-                        "exec-config-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        EvalSnapshotObservation.durableAgentRun(
+                                "exec-config-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        ),
                         null,
                         Duration.ofMillis(7)
                 )
@@ -359,6 +472,52 @@ class EvalHarnessTest {
     }
 
     @Test
+    void requestInterceptedSnapshotCannotBeFullyReproducible() {
+        EvalExecutionTarget target = new RuntimeEvalExecutionTarget(
+                "runtime",
+                ignored -> new RuntimeEvalExecutionTarget.Capture(
+                        result(TokenUsage.UNKNOWN), List.of(modelStarted(1)),
+                        List.of(telemetry(TokenUsage.UNKNOWN, null)),
+                        EvalSnapshotObservation.nonDurable("exec-config-v1-intercepted"),
+                        null, Duration.ZERO
+                )
+        );
+
+        EvalRun run = runner().run(
+                singleCaseSuite(), target, "abc123", EvalSourceTreeState.CLEAN
+        );
+
+        assertFalse(run.metadata().fullyReproducible());
+        assertTrue(run.metadata().runtimeConfigSnapshotIds().isEmpty());
+        assertEquals(EvalSnapshotProvenance.NON_DURABLE,
+                run.records().get(0).runtimeConfigSnapshotProvenance());
+    }
+
+    @Test
+    void runnerExecutesCasesSequentiallyInDatasetOrder() {
+        List<String> observed = new ArrayList<>();
+        EvalSuite suite = new EvalSuite("suite", "1", List.of(
+                evalCase("first"), evalCase("second"), evalCase("third")
+        ));
+        EvalExecutionTarget target = new RuntimeEvalExecutionTarget(
+                "runtime",
+                evalCase -> {
+                    observed.add(evalCase.caseId());
+                    return new RuntimeEvalExecutionTarget.Capture(
+                            result(TokenUsage.UNKNOWN), List.of(modelStarted(1)),
+                            List.of(telemetry(TokenUsage.UNKNOWN, null)),
+                            EvalSnapshotObservation.durableAgentRun("snapshot-" + evalCase.caseId()),
+                            null, Duration.ZERO
+                    );
+                }
+        );
+
+        runner().run(suite, target, "abc123", EvalSourceTreeState.CLEAN);
+
+        assertEquals(List.of("first", "second", "third"), observed);
+    }
+
+    @Test
     void dirtyTreeSerializationIsExplicitAndDeterministic() throws Exception {
         EvalRun run = runner().run(
                 singleCaseSuite(), completeTarget("exec-config-v1-a"),
@@ -393,7 +552,8 @@ class EvalHarnessTest {
         EvalExecutionTarget target = new RuntimeEvalExecutionTarget(
                 "runtime",
                 ignored -> new RuntimeEvalExecutionTarget.Capture(
-                        result(TokenUsage.UNKNOWN), List.of(), List.of(), null,
+                        result(TokenUsage.UNKNOWN), List.of(), List.of(),
+                        EvalSnapshotObservation.missing(),
                         null, Duration.ZERO
                 )
         );
@@ -414,8 +574,18 @@ class EvalHarnessTest {
     ) {
         return new EvalCase(
                 "case", "1", "fixture", List.of(AgentMessage.user("fixture")),
-                AgentStopReason.COMPLETED, allowed, expected, forbidden, 3,
-                maxModelCalls, maxToolCalls
+                new EvalExecutionConfig(3, allowed,
+                        new EvalExecutionBudget(maxModelCalls, maxToolCalls)),
+                new EvalOracle(AgentStopReason.COMPLETED, expected, forbidden,
+                        maxModelCalls, maxToolCalls)
+        );
+    }
+
+    private EvalCase evalCase(String caseId) {
+        return new EvalCase(
+                caseId, "1", "fixture", List.of(AgentMessage.user("fixture")),
+                new EvalExecutionConfig(3, Set.of(), EvalExecutionBudget.UNLIMITED),
+                new EvalOracle(AgentStopReason.COMPLETED, Set.of(), Set.of(), 1L, 0L)
         );
     }
 
@@ -427,7 +597,9 @@ class EvalHarnessTest {
     ) {
         return new EvalObservation(
                 result(usage), events, telemetry,
-                "exec-config-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                EvalSnapshotObservation.durableAgentRun(
+                        "exec-config-v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
                 pricing, Duration.ofMillis(12)
         );
     }
@@ -462,6 +634,16 @@ class EvalHarnessTest {
         return new ToolRequestedEvent(metadata(sequence, 1), "call-" + sequence, name);
     }
 
+    private ToolSucceededEvent toolSucceeded(long sequence, String name) {
+        return new ToolSucceededEvent(metadata(sequence, 1), "call-3", name);
+    }
+
+    private ToolFailedEvent toolFailed(long sequence, String name) {
+        return new ToolFailedEvent(
+                metadata(sequence, 1), "call-3", name, ToolErrorCode.EXECUTION_FAILED
+        );
+    }
+
     private AgentEventMetadata metadata(long sequence, int iteration) {
         return new AgentEventMetadata(
                 "event-" + sequence, "run", sequence, NOW, iteration
@@ -480,12 +662,13 @@ class EvalHarnessTest {
     ) {
         return new EvalRecord(
                 id, "fixture", pass, pass, pass, 0,
-                AgentStopReason.COMPLETED, List.of(), 1, 1, 0,
+                AgentStopReason.COMPLETED, List.of(), 0,
+                List.of(), List.of(), List.of(), List.of(), 1, 1, 0,
                 input, output, total,
                 input == null
                         ? TokenUsageStatus.UNKNOWN_OR_INCOMPLETE
                         : TokenUsageStatus.KNOWN,
-                cost, costStatus, latency, null, null
+                cost, costStatus, latency, null, null, EvalSnapshotProvenance.MISSING
         );
     }
 
@@ -506,7 +689,9 @@ class EvalHarnessTest {
                         result(TokenUsage.UNKNOWN),
                         List.of(modelStarted(1)),
                         List.of(telemetry(TokenUsage.UNKNOWN, null)),
-                        snapshotId,
+                        snapshotId == null
+                                ? EvalSnapshotObservation.missing()
+                                : EvalSnapshotObservation.durableAgentRun(snapshotId),
                         null,
                         Duration.ofMillis(7)
                 )

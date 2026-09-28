@@ -14,7 +14,7 @@ public record EvalObservation(
         AgentRunResult result,
         List<AgentEvent> events,
         List<ModelInvocationTelemetry> modelTelemetry,
-        String runtimeConfigSnapshotId,
+        EvalSnapshotObservation snapshotObservation,
         ModelPricing pricing,
         Duration latency
 ) {
@@ -25,11 +25,7 @@ public record EvalObservation(
         modelTelemetry = List.copyOf(Objects.requireNonNull(
                 modelTelemetry, "modelTelemetry must not be null"
         ));
-        if (runtimeConfigSnapshotId != null && runtimeConfigSnapshotId.isBlank()) {
-            throw new IllegalArgumentException(
-                    "runtimeConfigSnapshotId must not be blank when present"
-            );
-        }
+        Objects.requireNonNull(snapshotObservation, "snapshotObservation must not be null");
         Objects.requireNonNull(latency, "latency must not be null");
         if (latency.isNegative()) {
             throw new IllegalArgumentException("latency must not be negative");
