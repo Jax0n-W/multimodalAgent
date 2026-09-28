@@ -20,6 +20,8 @@ AgentRunner
 
 模型失败采用有限且稳定的分类：`TIMEOUT`、`RATE_LIMITED`、`PROVIDER_UNAVAILABLE`、`INVALID_REQUEST`、`CONTEXT_TOO_LARGE`、`MALFORMED_RESPONSE`、`PROVIDER_ERROR`。Adapter 必须显式提供能够可靠判断的类别，禁止解析异常 message 猜测；无法可靠分类时使用 `PROVIDER_ERROR`。Runtime Core 只将 `TIMEOUT` 映射为 `MODEL_TIMEOUT`，其他模型失败映射为 `MODEL_ERROR`，并始终保留真实的 `MODEL_FAILED` lifecycle fact。
 
+Provider transport 负责 HTTP 与 SSE failure classification。HTTP status 提供粗粒度分类：`429` 为 `RATE_LIMITED`，`5xx` 为 `PROVIDER_UNAVAILABLE`，普通无效 `4xx` 为 `INVALID_REQUEST`。结构化 Provider error payload 仅可依据稳定的 `code` 或 `type` 将 `INVALID_REQUEST` 细化为 `CONTEXT_TOO_LARGE`，不得解析自由文本 message 猜测。Malformed SSE JSON 为 `MALFORMED_RESPONSE`；DNS、连接拒绝、连接重置等明确的 transport availability failure 为 `PROVIDER_UNAVAILABLE`；其余未知错误保守回退为 `PROVIDER_ERROR`。分类不得依赖密钥、Authorization header、完整请求内容或可变外部状态。
+
 超时分为两类：`invocationTimeout` 限制一次完整模型调用的总时长，`idleTimeout` 限制流式响应连续无新事件的时长。流式 Adapter 仍然先聚合 Provider chunks，再产生唯一完整 `ModelTurn`；部分文本和部分 ToolCall 不会越过模型边界进入 ToolExecutor。因此超时不会执行不完整的 ToolCall，也不改变 P8 的 cooperative cancellation、ModelDelta、ToolCall ID 或 streamSequence 语义。
 
 `TokenUsage` 明确区分 `KNOWN` 与 `UNKNOWN_OR_INCOMPLETE`。真实的零 token 使用量可以表示为已知零值；Provider 未返回 usage 时必须使用 unknown，不能伪装成零。跨 invocation 聚合时，只要任一 usage 未知，Run 聚合结果就保持 incomplete，即使仍保留其他 invocation 已知的计数。

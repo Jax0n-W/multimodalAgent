@@ -7,6 +7,8 @@ import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -71,11 +73,14 @@ class ModelGatewayTest {
         assertTrue(event.succeeded());
     }
 
-    @Test
-    void preservesTypedProviderFailureWithoutMessageGuessing() {
+    @ParameterizedTest
+    @EnumSource(ModelFailureKind.class)
+    void preservesTypedProviderFailureAndTelemetryWithoutMessageGuessing(
+            ModelFailureKind failureKind
+    ) {
         List<ModelInvocationTelemetry> telemetry = new ArrayList<>();
         ModelProviderException providerFailure = new ModelProviderException(
-                ModelFailureKind.RATE_LIMITED,
+                failureKind,
                 "arbitrary text that contains no classification hint"
         );
         AgentModel provider = ignored -> {
@@ -88,11 +93,11 @@ class ModelGatewayTest {
                 () -> gateway.generate(REQUEST, 1)
         );
 
-        assertEquals(ModelFailureKind.RATE_LIMITED, failure.failureKind());
+        assertEquals(failureKind, failure.failureKind());
         assertSame(providerFailure, failure.getCause());
         assertEquals(1, telemetry.size());
         ModelInvocationTelemetry event = telemetry.get(0);
-        assertEquals(ModelFailureKind.RATE_LIMITED, event.failureKind());
+        assertEquals(failureKind, event.failureKind());
         assertEquals(TokenUsage.UNKNOWN, event.tokenUsage());
         assertEquals(Duration.ofNanos(25), event.latency());
         assertFalse(event.succeeded());

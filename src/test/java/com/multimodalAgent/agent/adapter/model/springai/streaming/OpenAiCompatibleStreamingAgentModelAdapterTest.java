@@ -132,6 +132,27 @@ class OpenAiCompatibleStreamingAgentModelAdapterTest {
     }
 
     @Test
+    void preservesTypedProviderFailureWithoutDoubleWrapping() {
+        ModelProviderException expected = new SpringAiModelAdapterException(
+                ModelFailureKind.RATE_LIMITED,
+                "classified by transport"
+        );
+        OpenAiCompatibleStreamingAgentModelAdapter adapter = adapter(
+                ignored -> Flux.error(expected),
+                delta -> { },
+                () -> 1
+        );
+
+        ModelProviderException actual = assertThrows(
+                ModelProviderException.class,
+                () -> adapter.generate(request())
+        );
+
+        assertTrue(actual == expected);
+        assertEquals(ModelFailureKind.RATE_LIMITED, actual.failureKind());
+    }
+
+    @Test
     void incompleteStreamNeverReturnsPartialTextAsSuccess() {
         OpenAiCompatibleStreamingAgentModelAdapter adapter = adapter(
                 ignored -> Flux.just(textChunk("partial", null)),

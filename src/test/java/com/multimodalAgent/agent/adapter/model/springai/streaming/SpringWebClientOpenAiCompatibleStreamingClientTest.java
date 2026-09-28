@@ -5,13 +5,23 @@ import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModelRequest;
 import com.multimodalAgent.agent.runtime.model.ModelFinishReason;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelProviderException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+import reactor.netty.http.client.PrematureCloseException;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.SocketException;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -20,7 +30,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SpringWebClientOpenAiCompatibleStreamingClientTest {
@@ -131,6 +143,162 @@ class SpringWebClientOpenAiCompatibleStreamingClientTest {
         }
     }
 
+    @Test
+    void classifiesMalformedSseJsonAsMalformedResponse() throws Exception {
+        ModelProviderException failure = invokeAgainstServer(
+                200,
+                "text/event-stream",
+                "data: {not-json}\n\n"
+        );
+
+        assertEquals(ModelFailureKind.MALFORMED_RESPONSE, failure.failureKind());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "429, RATE_LIMITED",
+            "500, PROVIDER_UNAVAILABLE",
+            "503, PROVIDER_UNAVAILABLE",
+            "400, INVALID_REQUEST",
+            "401, INVALID_REQUEST",
+            "403, INVALID_REQUEST"
+    })
+    void classifiesHttpStatusWithoutDependingOnErrorMessage(
+            int status,
+            ModelFailureKind expected
+    ) throws Exception {
+        ModelProviderException failure = invokeAgainstServer(
+                status,
+                "application/json",
+                "{\"error\":{\"message\":\"arbitrary provider text\"}}"
+        );
+
+        assertEquals(expected, failure.failureKind());
+    }
+
+    @Test
+    void refinesStructuredContextLengthCodeWithoutParsingMessageText() throws Exception {
+        ModelProviderException failure = invokeAgainstServer(
+                400,
+                "application/json",
+                "{\"error\":{\"message\":\"request rejected\","
+                        + "\"type\":\"invalid_request_error\","
+                        + "\"code\":\"context_length_exceeded\"}}"
+        );
+
+        assertEquals(ModelFailureKind.CONTEXT_TOO_LARGE, failure.failureKind());
+    }
+
+    @Test
+    void refinesStructuredContextLengthTypeWithoutParsingMessageText() throws Exception {
+        ModelProviderException failure = invokeAgainstServer(
+                422,
+                "application/json",
+                "{\"error\":{\"message\":\"request rejected\","
+                        + "\"type\":\"context_window_exceeded\"}}"
+        );
+
+        assertEquals(ModelFailureKind.CONTEXT_TOO_LARGE, failure.failureKind());
+    }
+
+    @Test
+    void contextWordsInFreeTextDoNotInventContextTooLargeClassification() throws Exception {
+        ModelProviderException failure = invokeAgainstServer(
+                422,
+                "application/json",
+                "{\"error\":{\"message\":\"context is too long\","
+                        + "\"type\":\"invalid_request_error\",\"code\":\"unknown\"}}"
+        );
+
+        assertEquals(ModelFailureKind.INVALID_REQUEST, failure.failureKind());
+    }
+
+    @Test
+    void malformedErrorBodyFallsBackToHttpStatusAndIsNotDisclosed() throws Exception {
+        String sensitiveBody = "not-json-with-sensitive-provider-detail";
+
+        ModelProviderException failure = invokeAgainstServer(
+                503,
+                "application/json",
+                sensitiveBody
+        );
+
+        assertEquals(ModelFailureKind.PROVIDER_UNAVAILABLE, failure.failureKind());
+        assertFalse(failure.getMessage().contains(sensitiveBody));
+    }
+
+    @Test
+    void mapsOnlyKnownNetworkAvailabilityFailuresToProviderUnavailable() {
+        assertTransportFailure(
+                new UnknownHostException("provider.invalid"),
+                ModelFailureKind.PROVIDER_UNAVAILABLE
+        );
+        assertTransportFailure(
+                new ConnectException("connection refused"),
+                ModelFailureKind.PROVIDER_UNAVAILABLE
+        );
+        assertTransportFailure(
+                new SocketException("connection reset"),
+                ModelFailureKind.PROVIDER_UNAVAILABLE
+        );
+        assertTransportFailure(
+                PrematureCloseException.TEST_EXCEPTION,
+                ModelFailureKind.PROVIDER_UNAVAILABLE
+        );
+        assertTransportFailure(
+                new IllegalStateException("unknown transport failure"),
+                ModelFailureKind.PROVIDER_ERROR
+        );
+    }
+
+    private ModelProviderException invokeAgainstServer(
+            int status,
+            String contentType,
+            String responseBody
+    ) throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> respond(
+                exchange,
+                status,
+                contentType,
+                responseBody
+        ));
+        server.start();
+        try {
+            SpringWebClientOpenAiCompatibleStreamingClient client =
+                    new SpringWebClientOpenAiCompatibleStreamingClient(
+                            "http://127.0.0.1:" + server.getAddress().getPort(),
+                            "test-key",
+                            new ObjectMapper()
+                    );
+            return assertThrows(
+                    ModelProviderException.class,
+                    () -> client.stream(request()).collectList().block(Duration.ofSeconds(5))
+            );
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private void assertTransportFailure(Throwable transportFailure, ModelFailureKind expected) {
+        WebClient webClient = WebClient.builder()
+                .baseUrl("http://unused.invalid")
+                .exchangeFunction(request -> Mono.error(transportFailure))
+                .build();
+        SpringWebClientOpenAiCompatibleStreamingClient client =
+                new SpringWebClientOpenAiCompatibleStreamingClient(
+                        webClient,
+                        new ObjectMapper()
+                );
+
+        ModelProviderException failure = assertThrows(
+                ModelProviderException.class,
+                () -> client.stream(request()).collectList().block(Duration.ofSeconds(5))
+        );
+
+        assertEquals(expected, failure.failureKind());
+    }
+
     private void respond(
             HttpExchange exchange,
             String responseBody,
@@ -142,6 +310,20 @@ class SpringWebClientOpenAiCompatibleStreamingClientTest {
         byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
         exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+    }
+
+    private void respond(
+            HttpExchange exchange,
+            int status,
+            String contentType,
+            String responseBody
+    ) throws IOException {
+        exchange.getRequestBody().readAllBytes();
+        byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", contentType);
+        exchange.sendResponseHeaders(status, body.length);
         exchange.getResponseBody().write(body);
         exchange.close();
     }
