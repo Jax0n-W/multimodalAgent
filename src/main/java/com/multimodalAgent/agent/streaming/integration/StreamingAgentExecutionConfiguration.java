@@ -21,6 +21,9 @@ import com.multimodalAgent.agent.harness.AgentExecutionCoordinator;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceComposition;
 import com.multimodalAgent.agent.persistence.integration.PersistentAgentExecutionCoordinator;
+import com.multimodalAgent.agent.recovery.RecoveryCheckpointStore;
+import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointRuntimeMiddleware;
+import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointingAgentExecutionCoordinator;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
@@ -30,6 +33,7 @@ import com.multimodalAgent.agent.runtime.extension.RuntimeMiddleware;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelGateway;
+import com.multimodalAgent.agent.runtime.model.gateway.GovernedAgentModel;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationTelemetrySink;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelTimeoutPolicy;
@@ -52,6 +56,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.function.Function;
 
 /** Opt-in production composition of P8.2–P8.4, P6, and optional P7. */
@@ -207,6 +212,7 @@ public class StreamingAgentExecutionConfiguration {
             ResolvedExecutionConfigResolver configResolver,
             ExecutionConfigSnapshotFactory snapshotFactory,
             ExecutionConfigSnapshotStore snapshotStore,
+            RecoveryCheckpointStore recoveryCheckpointStore,
             ObjectProvider<RunLeaseStore> leaseStoreProvider,
             ObjectProvider<RunLeaseWatchdogFactory> watchdogFactoryProvider
     ) {
@@ -240,6 +246,7 @@ public class StreamingAgentExecutionConfiguration {
         if (leaseStore != null) {
             middleware.add(new ExecutionCoordinationBoundaryMiddleware());
         }
+        middleware.add(new RecoveryCheckpointRuntimeMiddleware(persistence::assertHealthy));
         middleware.add(persistence.boundaryMiddleware());
         AgentExecutionCoordinator core = new AgentExecutionCoordinator(
                 runner,
@@ -253,12 +260,21 @@ public class StreamingAgentExecutionConfiguration {
                         watchdogFactory,
                         persistent
                  )::execute;
+        Optional<ModelIdentity> recoveryModelIdentity = model instanceof GovernedAgentModel governed
+                ? governed.modelIdentity()
+                : Optional.empty();
+        RecoveryCheckpointingAgentExecutionCoordinator checkpointing =
+                new RecoveryCheckpointingAgentExecutionCoordinator(
+                        recoveryCheckpointStore,
+                        recoveryModelIdentity,
+                        governedExecution
+                );
         SnapshottingAgentExecutionCoordinator snapshotting =
                 new SnapshottingAgentExecutionCoordinator(
                         configResolver,
                         snapshotFactory,
                         snapshotStore,
-                        governedExecution
+                        checkpointing::execute
                 );
         return new StreamingAgentExecutionService(
                 snapshotting::execute,

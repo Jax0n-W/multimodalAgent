@@ -32,6 +32,11 @@ public final class ExecutionPersistenceComposition {
         return boundaryMiddleware;
     }
 
+    /** Ensures a recovery checkpoint can never outrun a failed durable-history projection. */
+    public void assertHealthy(String runId) {
+        failures.throwIfFailed(runId);
+    }
+
     public PersistentAgentExecutionCoordinator persistentCoordinator(
             AgentExecutionCoordinator delegate
     ) {

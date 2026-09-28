@@ -31,7 +31,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(3, result.migrationsExecuted);
+        assertEquals(4, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -42,13 +42,14 @@ class AgentRuntimeMySqlMigrationTest {
                            'agent_runs',
                            'agent_steps',
                            'tool_executions',
-                           'agent_runtime_config_snapshots'
+                           'agent_runtime_config_snapshots',
+                           'agent_recovery_checkpoints'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(4, resultSet.getInt(1));
+                assertEquals(5, resultSet.getInt(1));
             }
         }
 
@@ -60,6 +61,11 @@ class AgentRuntimeMySqlMigrationTest {
             assertColumns(connection, "tool_executions", List.of("version"));
             assertColumns(connection, "agent_runtime_config_snapshots", List.of(
                     "snapshot_id", "schema_version", "config_hash", "config_json", "created_at"
+            ));
+            assertColumns(connection, "agent_recovery_checkpoints", List.of(
+                    "id", "checkpoint_id", "run_id", "checkpoint_sequence",
+                    "schema_version", "iteration", "boundary", "state_json",
+                    "runtime_config_snapshot_id", "created_at"
             ));
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
@@ -77,6 +83,28 @@ class AgentRuntimeMySqlMigrationTest {
                     connection,
                     "agent_runs",
                     "fk_agent_runs_runtime_config_snapshot",
+                    "runtime_config_snapshot_id",
+                    "agent_runtime_config_snapshots",
+                    "snapshot_id"
+            );
+            assertUniqueIndex(
+                    connection,
+                    "agent_recovery_checkpoints",
+                    "uk_agent_recovery_checkpoints_identity",
+                    List.of("checkpoint_id")
+            );
+            assertForeignKey(
+                    connection,
+                    "agent_recovery_checkpoints",
+                    "fk_agent_recovery_checkpoints_run",
+                    "run_id",
+                    "agent_runs",
+                    "run_id"
+            );
+            assertForeignKey(
+                    connection,
+                    "agent_recovery_checkpoints",
+                    "fk_agent_recovery_checkpoints_runtime_config_snapshot",
                     "runtime_config_snapshot_id",
                     "agent_runtime_config_snapshots",
                     "snapshot_id"

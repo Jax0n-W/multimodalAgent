@@ -6,6 +6,7 @@ import com.multimodalAgent.agent.domain.UserAccount;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceException;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
+import com.multimodalAgent.agent.persistence.repository.AgentRecoveryCheckpointRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentRuntimeConfigSnapshotRepository;
 import com.multimodalAgent.agent.repository.UserAccountRepository;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
@@ -78,6 +79,9 @@ class ProductionStreamingAgentExecutionTest {
     private AgentRunRepository runs;
 
     @Autowired
+    private AgentRecoveryCheckpointRepository recoveryCheckpoints;
+
+    @Autowired
     private AgentRuntimeConfigSnapshotRepository snapshots;
 
     @Autowired
@@ -127,6 +131,12 @@ class ProductionStreamingAgentExecutionTest {
         var persistedRun = runs.findByRunId(runId).orElseThrow();
         assertNotNull(persistedRun.getRuntimeConfigSnapshotId());
         assertTrue(snapshots.existsById(persistedRun.getRuntimeConfigSnapshotId()));
+        var checkpoint = recoveryCheckpoints
+                .findFirstByRunIdOrderByCheckpointSequenceDesc(runId)
+                .orElseThrow();
+        assertEquals("AFTER_MODEL_OUTCOME", checkpoint.getBoundary());
+        assertEquals(persistedRun.getRuntimeConfigSnapshotId(),
+                checkpoint.getRuntimeConfigSnapshotId());
         assertFalse(hub.isOpen(runId));
     }
 

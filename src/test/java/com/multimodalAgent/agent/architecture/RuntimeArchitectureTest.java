@@ -21,6 +21,7 @@ class RuntimeArchitectureTest {
             "com.multimodalAgent.agent.coordination.integration..";
     private static final String COORDINATION_WATCHDOG =
             "com.multimodalAgent.agent.coordination.watchdog..";
+    private static final String RECOVERY_DOMAIN = "com.multimodalAgent.agent.recovery";
     private final JavaClasses runtimeClasses = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("com.multimodalAgent.agent.runtime");
@@ -30,6 +31,9 @@ class RuntimeArchitectureTest {
     private final JavaClasses streamClasses = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("com.multimodalAgent.agent.stream");
+    private final JavaClasses recoveryClasses = new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("com.multimodalAgent.agent.recovery");
 
     @Test
     void runtimeMustNotDependOnApplicationOrInfrastructurePackages() {
@@ -66,6 +70,22 @@ class RuntimeArchitectureTest {
                         "redis.clients.jedis.."
                 )
                 .check(runtimeClasses);
+    }
+
+    @Test
+    void recoveryDomainMustRemainFrameworkNeutral() {
+        noClasses().that().resideInAPackage(RECOVERY_DOMAIN)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "org.springframework..",
+                        "jakarta.persistence..",
+                        "org.hibernate..",
+                        "org.flywaydb..",
+                        "com.fasterxml.jackson..",
+                        "org.springframework.data.redis..",
+                        "io.lettuce..",
+                        "redis.clients.jedis.."
+                )
+                .check(recoveryClasses);
     }
 
     @Test

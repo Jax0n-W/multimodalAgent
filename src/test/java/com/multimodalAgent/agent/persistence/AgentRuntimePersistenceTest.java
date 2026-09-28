@@ -69,13 +69,14 @@ class AgentRuntimePersistenceTest {
                       'AGENT_RUNS',
                       'AGENT_STEPS',
                       'TOOL_EXECUTIONS',
-                      'AGENT_RUNTIME_CONFIG_SNAPSHOTS'
+                      'AGENT_RUNTIME_CONFIG_SNAPSHOTS',
+                      'AGENT_RECOVERY_CHECKPOINTS'
                   )
                 """,
                 Integer.class
         );
 
-        assertEquals(4, tableCount);
+        assertEquals(5, tableCount);
     }
 
     @Test
