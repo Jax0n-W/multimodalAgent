@@ -30,7 +30,7 @@ EvalRunner V1 executes cases strictly and synchronously in dataset order. Each c
 
 Baseline comparison first requires identical suite ID, suite version, and case-ID set. Case order does not matter. An incompatible dataset produces the typed `INCOMPATIBLE_BASELINE` failure and no deltas. Different Git revisions, model identities, runtime snapshots, token usage, costs, and latency remain intentionally comparable when the dataset contract is identical.
 
-Incomplete token usage is represented as unknown, never as zero. Cost is reported only when both complete usage and explicit matching pricing are available. Latency percentiles use the nearest-rank method: sort ascending and select one-based rank `ceil(p * N)`.
+Incomplete token usage is represented as unknown, never as zero. Cost is reported only when usage is complete, exactly one distinct model identity is observed from case-scoped model telemetry, and explicit pricing matches that observed identity. The pricing identity is never substituted for missing Runtime identity evidence; missing, ambiguous, or mismatched identity makes cost unknown. Latency percentiles use the nearest-rank method: sort ascending and select one-based rank `ceil(p * N)`.
 
 ## Consequences
 

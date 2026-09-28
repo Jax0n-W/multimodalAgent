@@ -278,6 +278,68 @@ class EvalHarnessTest {
     }
 
     @Test
+    void recordKeepsCostUnknownWhenObservedIdentityDoesNotMatchPricing() {
+        ModelPricing pricing = new ModelPricing(
+                IDENTITY, new BigDecimal("2.00"), new BigDecimal("4.00")
+        );
+        EvalRecord record = new EvalRecordFactory().create(
+                evalCase(Set.of(), Set.of(), Set.of(), 1L, 0L),
+                observation(new TokenUsage(1_000_000, 500_000),
+                        List.of(modelStarted(1)),
+                        List.of(telemetry(
+                                new ModelIdentity("ollama", "different-model"),
+                                new TokenUsage(1_000_000, 500_000),
+                                null
+                        )),
+                        pricing)
+        );
+
+        assertEquals(CostStatus.UNKNOWN, record.costStatus());
+        assertNull(record.estimatedCost());
+    }
+
+    @Test
+    void recordKeepsCostUnknownWhenObservedIdentityIsMissingOrAmbiguous() {
+        ModelPricing pricing = new ModelPricing(
+                IDENTITY, new BigDecimal("2.00"), new BigDecimal("4.00")
+        );
+        TokenUsage usage = new TokenUsage(1_000_000, 500_000);
+        EvalCase evalCase = evalCase(Set.of(), Set.of(), Set.of(), 2L, 0L);
+
+        EvalRecord missing = new EvalRecordFactory().create(
+                evalCase,
+                observation(usage, List.of(modelStarted(1)), List.of(), pricing)
+        );
+        EvalRecord ambiguous = new EvalRecordFactory().create(
+                evalCase,
+                observation(usage, List.of(modelStarted(1), modelStarted(2)), List.of(
+                        telemetry(IDENTITY, usage, null),
+                        telemetry(new ModelIdentity("ollama", "different-model"), usage, null)
+                ), pricing)
+        );
+
+        assertEquals(CostStatus.UNKNOWN, missing.costStatus());
+        assertNull(missing.estimatedCost());
+        assertEquals(CostStatus.UNKNOWN, ambiguous.costStatus());
+        assertNull(ambiguous.estimatedCost());
+    }
+
+    @Test
+    void recordKeepsCostUnknownWhenMatchingIdentityHasIncompleteUsage() {
+        ModelPricing pricing = new ModelPricing(
+                IDENTITY, new BigDecimal("2.00"), new BigDecimal("4.00")
+        );
+        EvalRecord record = new EvalRecordFactory().create(
+                evalCase(Set.of(), Set.of(), Set.of(), 1L, 0L),
+                observation(TokenUsage.UNKNOWN, List.of(modelStarted(1)),
+                        List.of(telemetry(TokenUsage.UNKNOWN, null)), pricing)
+        );
+
+        assertEquals(CostStatus.UNKNOWN, record.costStatus());
+        assertNull(record.estimatedCost());
+    }
+
+    @Test
     void aggregationUsesNearestRankAndDoesNotPretendPartialUsageIsComplete() {
         EvalMetricsAggregator aggregator = new EvalMetricsAggregator();
         assertEquals(5L, EvalMetricsAggregator.percentileNearestRank(
@@ -615,8 +677,16 @@ class EvalHarnessTest {
             TokenUsage usage,
             ModelFailureKind failureKind
     ) {
+        return telemetry(IDENTITY, usage, failureKind);
+    }
+
+    private ModelInvocationTelemetry telemetry(
+            ModelIdentity identity,
+            TokenUsage usage,
+            ModelFailureKind failureKind
+    ) {
         return new ModelInvocationTelemetry(
-                "invocation", IDENTITY, 1, Duration.ofMillis(5),
+                "invocation-" + identity.model(), identity, 1, Duration.ofMillis(5),
                 failureKind == null ? ModelFinishReason.STOP : null,
                 usage, failureKind
         );

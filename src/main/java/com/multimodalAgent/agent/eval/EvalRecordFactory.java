@@ -8,6 +8,7 @@ import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
 import com.multimodalAgent.agent.runtime.event.ToolSucceededEvent;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelFailureKind;
+import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -67,10 +68,16 @@ public final class EvalRecordFactory {
         );
         TokenUsage usage = observation.result().tokenUsage();
         boolean usageComplete = usage.isComplete();
+        List<ModelIdentity> observedIdentities = observation.modelTelemetry().stream()
+                .map(telemetry -> telemetry.identity())
+                .distinct()
+                .limit(2)
+                .toList();
         BigDecimal estimatedCost = observation.pricing() == null
+                || observedIdentities.size() != 1
                 ? null
                 : costCalculator.calculate(
-                        observation.pricing().identity(), usage, observation.pricing()
+                        observedIdentities.get(0), usage, observation.pricing()
                 ).orElse(null);
         ModelFailureKind failureKind = observation.modelTelemetry().stream()
                 .filter(telemetry -> telemetry.failureKind() != null)

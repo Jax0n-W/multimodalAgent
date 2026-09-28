@@ -38,7 +38,7 @@ Artifacts are written to `target/eval/`:
 - `eval-summary.json`: metadata and aggregate metrics
 - `eval-report.md`: human-readable summary and reproducibility warnings
 
-Cost remains unknown unless explicit pricing is supplied. Baseline comparison reports deltas only; no regression threshold is defined in P9.4.
+Cost remains unknown unless token usage is complete, case-scoped telemetry observes exactly one distinct model identity, and explicit pricing matches that observed identity. Pricing metadata cannot stand in for missing or ambiguous Runtime identity evidence. Baseline comparison reports deltas only; no regression threshold is defined in P9.4.
 
 ## Source provenance
 
