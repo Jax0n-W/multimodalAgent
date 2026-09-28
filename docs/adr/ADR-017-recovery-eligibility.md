@@ -23,6 +23,8 @@ Classification precedence is stable: missing run, terminal truth, never-started 
 
 Terminal truth is never recoverable. A `CREATED` run is not crash recovery. A running run without a checkpoint cannot be reconstructed from execution history alone. A waiting-approval run requires a matching `WAITING_APPROVAL` checkpoint.
 
+A coherent `WAITING_APPROVAL` state cannot contain `STARTED` or `UNKNOWN` tool execution evidence. If it does, the approval state contradicts durable tool history and fails closed as `INCONSISTENT_TOOL_HISTORY`; approval classification must never hide possible or already-started side effects. A represented `PLANNED` tool remains compatible with approval waiting because it has not crossed `TOOL_STARTED`.
+
 `PLANNED` tool work represented by the checkpoint has not crossed `TOOL_STARTED` and does not itself imply side-effect ambiguity. `STARTED` and `UNKNOWN` require reconciliation without consulting tool replay policy. Confirmed `SUCCEEDED`, `FAILED`, `BLOCKED`, or `CANCELLED` facts require an exact checkpoint tool-result message for the same call identity and tool name; result summaries are not continuation state.
 
 An in-flight model attempt is distinct from tool reconciliation. It fails closed because model-call budget and provider usage may not be represented by the checkpoint. Confirmed model outcomes newer than the checkpoint cannot be silently re-executed. When an `AFTER_MODEL_OUTCOME` checkpoint contains a plain assistant result but cannot distinguish `STOP` from `LENGTH`, V1 returns `NOT_RESUMABLE` rather than guessing control flow.

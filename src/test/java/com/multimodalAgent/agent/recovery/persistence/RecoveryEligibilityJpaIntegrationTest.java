@@ -196,18 +196,69 @@ class RecoveryEligibilityJpaIntegrationTest {
         );
     }
 
+    @Test
+    void waitingApprovalCannotHideStartedToolHistory() {
+        AgentRunEntity run = runRepository.findByRunId(RUN_ID).orElseThrow();
+        run.setStatus(AgentRunStatus.WAITING_APPROVAL);
+        runRepository.saveAndFlush(run);
+
+        AgentStepEntity step = stepRepository.findByStepId(STEP_ID).orElseThrow();
+        step.setStatus(AgentStepStatus.RUNNING);
+        step.setStartedAt(Instant.parse("2026-09-28T03:01:00Z"));
+        stepRepository.saveAndFlush(step);
+
+        ToolExecutionEntity tool = toolRepository
+                .findByRunIdAndToolCallId(RUN_ID, TOOL_CALL_ID)
+                .orElseThrow();
+        tool.setStatus(ToolExecutionStatus.STARTED);
+        tool.setStartedAt(Instant.parse("2026-09-28T03:01:00Z"));
+        toolRepository.saveAndFlush(tool);
+        checkpointStore.persist(checkpoint(
+                "checkpoint-jpa-approval",
+                2,
+                RecoveryCheckpointBoundary.WAITING_APPROVAL
+        ));
+
+        RecoveryDecision decision = evaluator.evaluate(evidenceReader.load(RUN_ID));
+
+        assertEquals(RecoveryDisposition.NOT_RESUMABLE, decision.disposition());
+        assertEquals(RecoveryReason.INCONSISTENT_TOOL_HISTORY, decision.primaryReason());
+        assertEquals(
+                AgentRunStatus.WAITING_APPROVAL,
+                runRepository.findByRunId(RUN_ID).orElseThrow().getStatus()
+        );
+        assertEquals(
+                ToolExecutionStatus.STARTED,
+                toolRepository.findByRunIdAndToolCallId(RUN_ID, TOOL_CALL_ID)
+                        .orElseThrow()
+                        .getStatus()
+        );
+    }
+
     private RecoveryCheckpoint checkpoint() {
+        return checkpoint(
+                "checkpoint-jpa",
+                1,
+                RecoveryCheckpointBoundary.AFTER_MODEL_OUTCOME
+        );
+    }
+
+    private RecoveryCheckpoint checkpoint(
+            String checkpointId,
+            long sequence,
+            RecoveryCheckpointBoundary boundary
+    ) {
         ToolCall call = new ToolCall(
                 TOOL_CALL_ID,
                 "knowledge_search",
                 Map.of("query", "recovery")
         );
         return new RecoveryCheckpoint(
-                "checkpoint-jpa",
+                checkpointId,
                 RUN_ID,
+                sequence,
                 1,
-                1,
-                RecoveryCheckpointBoundary.AFTER_MODEL_OUTCOME,
+                boundary,
                 List.of(
                         AgentMessage.user("find it"),
                         AgentMessage.assistantToolCalls(List.of(call))
@@ -220,7 +271,7 @@ class RecoveryEligibilityJpaIntegrationTest {
                 ),
                 Set.of(),
                 SNAPSHOT_ID,
-                Instant.parse("2026-09-28T03:00:00Z"),
+                Instant.parse("2026-09-28T03:00:00Z").plusSeconds(sequence - 1),
                 RecoveryCheckpoint.CURRENT_SCHEMA_VERSION
         );
     }

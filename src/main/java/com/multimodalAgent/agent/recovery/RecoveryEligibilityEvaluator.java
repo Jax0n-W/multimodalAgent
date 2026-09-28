@@ -85,20 +85,28 @@ public final class RecoveryEligibilityEvaluator {
         }
 
         if (run.status() == RecoveryRunStatus.WAITING_APPROVAL) {
-            if (checkpoint.isPresent()
-                    && checkpoint.orElseThrow().boundary()
-                    == RecoveryCheckpointBoundary.WAITING_APPROVAL) {
+            if (checkpoint.isEmpty()
+                    || checkpoint.orElseThrow().boundary()
+                    != RecoveryCheckpointBoundary.WAITING_APPROVAL) {
                 return decision(
                         evidence,
-                        RecoveryDisposition.MANUAL_INTERVENTION,
-                        RecoveryReason.AWAITING_APPROVAL,
+                        RecoveryDisposition.NOT_RESUMABLE,
+                        RecoveryReason.MISSING_APPROVAL_CHECKPOINT,
+                        List.of()
+                );
+            }
+            if (evidence.toolFacts().stream().anyMatch(this::isAmbiguous)) {
+                return decision(
+                        evidence,
+                        RecoveryDisposition.NOT_RESUMABLE,
+                        RecoveryReason.INCONSISTENT_TOOL_HISTORY,
                         List.of()
                 );
             }
             return decision(
                     evidence,
-                    RecoveryDisposition.NOT_RESUMABLE,
-                    RecoveryReason.MISSING_APPROVAL_CHECKPOINT,
+                    RecoveryDisposition.MANUAL_INTERVENTION,
+                    RecoveryReason.AWAITING_APPROVAL,
                     List.of()
             );
         }
@@ -113,8 +121,7 @@ public final class RecoveryEligibilityEvaluator {
         }
 
         List<RecoveryToolDiagnostic> ambiguousTools = evidence.toolFacts().stream()
-                .filter(tool -> tool.status() == RecoveryToolStatus.STARTED
-                        || tool.status() == RecoveryToolStatus.UNKNOWN)
+                .filter(this::isAmbiguous)
                 .sorted(Comparator.comparing(RecoveryToolEvidence::toolCallId)
                         .thenComparing(RecoveryToolEvidence::toolName)
                         .thenComparing(tool -> tool.status().name()))
@@ -394,6 +401,11 @@ public final class RecoveryEligibilityEvaluator {
                 || status == RecoveryToolStatus.FAILED
                 || status == RecoveryToolStatus.BLOCKED
                 || status == RecoveryToolStatus.CANCELLED;
+    }
+
+    private boolean isAmbiguous(RecoveryToolEvidence tool) {
+        return tool.status() == RecoveryToolStatus.STARTED
+                || tool.status() == RecoveryToolStatus.UNKNOWN;
     }
 
     private record CheckpointIndex(

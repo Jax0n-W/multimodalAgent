@@ -128,6 +128,51 @@ class RecoveryEligibilityEvaluatorTest {
     }
 
     @Test
+    void waitingApprovalRejectsStartedAndUnknownToolHistory() {
+        for (RecoveryToolStatus status : List.of(
+                RecoveryToolStatus.STARTED,
+                RecoveryToolStatus.UNKNOWN
+        )) {
+            RecoveryDecision decision = evaluator.evaluate(evidence(
+                    run(RecoveryRunStatus.WAITING_APPROVAL, 1),
+                    Optional.of(toolCallCheckpoint(
+                            1,
+                            RecoveryCheckpointBoundary.WAITING_APPROVAL
+                    )),
+                    List.of(model(1, 1, RecoveryModelStatus.SUCCEEDED)),
+                    List.of(tool(1, 2, status)),
+                    List.of()
+            ));
+
+            assertDecision(
+                    decision,
+                    RecoveryDisposition.NOT_RESUMABLE,
+                    RecoveryReason.INCONSISTENT_TOOL_HISTORY
+            );
+        }
+    }
+
+    @Test
+    void waitingApprovalAllowsRepresentedPlannedTool() {
+        RecoveryDecision decision = evaluator.evaluate(evidence(
+                run(RecoveryRunStatus.WAITING_APPROVAL, 1),
+                Optional.of(toolCallCheckpoint(
+                        1,
+                        RecoveryCheckpointBoundary.WAITING_APPROVAL
+                )),
+                List.of(model(1, 1, RecoveryModelStatus.SUCCEEDED)),
+                List.of(tool(1, 2, RecoveryToolStatus.PLANNED)),
+                List.of()
+        ));
+
+        assertDecision(
+                decision,
+                RecoveryDisposition.MANUAL_INTERVENTION,
+                RecoveryReason.AWAITING_APPROVAL
+        );
+    }
+
+    @Test
     void plannedToolRepresentedByCheckpointDoesNotBlockResume() {
         RecoveryDecision decision = evaluator.evaluate(evidence(
                 run(RecoveryRunStatus.RUNNING, 1),
