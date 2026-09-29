@@ -80,6 +80,9 @@ public class ToolExecutionEntity {
     @Column(name = "started_at")
     private Instant startedAt;
 
+    @Column(name = "started_attempt_count", nullable = false)
+    private long startedAttemptCount;
+
     @Column(name = "completed_at")
     private Instant completedAt;
 
@@ -253,6 +256,16 @@ public class ToolExecutionEntity {
 
     public void setStartedAt(Instant startedAt) {
         this.startedAt = startedAt;
+    }
+
+    public long getStartedAttemptCount() {
+        return startedAttemptCount;
+    }
+
+    public void recordStartedAttempt(Instant startedAt) {
+        this.startedAttemptCount = Math.addExact(startedAttemptCount, 1L);
+        this.status = ToolExecutionStatus.STARTED;
+        this.startedAt = Objects.requireNonNull(startedAt, "startedAt must not be null");
     }
 
     public Instant getCompletedAt() {

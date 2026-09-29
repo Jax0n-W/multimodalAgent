@@ -124,21 +124,44 @@ public class RecoveryEngine {
         authority.assertAuthority(candidate.runId());
         RecoveryDecision decision = evaluator.evaluate(evidence);
         Set<String> retries = Set.of();
-        while (decision.disposition() == RecoveryDisposition.REQUIRES_RECONCILIATION) {
-            RecoveryRepairResult repair = repairerFactory.create(authority).repair(evidence);
-            authority.assertAuthority(candidate.runId());
-            if (repair.status() == RecoveryRepairResult.Status.MANUAL) {
-                return RecoveryEngineResult.of(
-                        RecoveryEngineResult.Status.MANUAL_INTERVENTION
-                );
+        RecoveryToolRepairer repairer = null;
+        while (true) {
+            if (decision.disposition() == RecoveryDisposition.REQUIRES_RECONCILIATION) {
+                if (repairer == null) {
+                    repairer = repairerFactory.create(authority);
+                }
+                RecoveryRepairResult repair = repairer.repair(evidence);
+                authority.assertAuthority(candidate.runId());
+                if (repair.status() == RecoveryRepairResult.Status.MANUAL) {
+                    return RecoveryEngineResult.of(
+                            RecoveryEngineResult.Status.MANUAL_INTERVENTION
+                    );
+                }
+                evidence = evidenceReader.load(candidate.runId());
+                authority.assertAuthority(candidate.runId());
+                decision = evaluator.evaluate(evidence);
+                if (repair.status() == RecoveryRepairResult.Status.RETRY_AUTHORIZED) {
+                    retries = repair.retryToolCallIds();
+                    break;
+                }
+                continue;
             }
-            evidence = evidenceReader.load(candidate.runId());
-            authority.assertAuthority(candidate.runId());
-            decision = evaluator.evaluate(evidence);
-            if (repair.status() == RecoveryRepairResult.Status.RETRY_AUTHORIZED) {
-                retries = repair.retryToolCallIds();
-                break;
+            if (decision.disposition() == RecoveryDisposition.NOT_RESUMABLE
+                    && decision.primaryReason()
+                    == RecoveryReason.CHECKPOINT_BEHIND_CONFIRMED_TOOL_FACT) {
+                if (repairer == null) {
+                    repairer = repairerFactory.create(authority);
+                }
+                if (!repairer.repairConfirmedSuccessCheckpointLag(evidence)) {
+                    return RecoveryEngineResult.of(RecoveryEngineResult.Status.NOT_RESUMABLE);
+                }
+                authority.assertAuthority(candidate.runId());
+                evidence = evidenceReader.load(candidate.runId());
+                authority.assertAuthority(candidate.runId());
+                decision = evaluator.evaluate(evidence);
+                continue;
             }
+            break;
         }
         if (decision.disposition() == RecoveryDisposition.MANUAL_INTERVENTION) {
             return RecoveryEngineResult.of(RecoveryEngineResult.Status.MANUAL_INTERVENTION);

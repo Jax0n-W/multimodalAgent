@@ -26,10 +26,11 @@ public final class BudgetRecoveryReconstructor {
                 .distinct()
                 .count();
         long durableToolCalls = toolFacts.stream()
-                .filter(this::consumedToolCall)
-                .map(RecoveryToolEvidence::executionId)
-                .distinct()
-                .count();
+                .mapToLong(tool -> Objects.requireNonNull(
+                        tool,
+                        "tool evidence must not be null"
+                ).startedAttemptCount())
+                .reduce(0L, Math::addExact);
         long additionalModelCalls = positiveDifference(durableModelCalls, base.modelCalls());
         long additionalToolCalls = positiveDifference(durableToolCalls, base.toolCalls());
         boolean unknownUsage = base.unknownUsageObserved() || additionalModelCalls > 0;
@@ -51,14 +52,6 @@ public final class BudgetRecoveryReconstructor {
         return evidence.status() == RecoveryModelStatus.RUNNING
                 || evidence.status() == RecoveryModelStatus.SUCCEEDED
                 || evidence.status() == RecoveryModelStatus.FAILED;
-    }
-
-    private boolean consumedToolCall(RecoveryToolEvidence evidence) {
-        Objects.requireNonNull(evidence, "tool evidence must not be null");
-        return evidence.status() == RecoveryToolStatus.STARTED
-                || evidence.status() == RecoveryToolStatus.UNKNOWN
-                || evidence.status() == RecoveryToolStatus.SUCCEEDED
-                || evidence.status() == RecoveryToolStatus.FAILED;
     }
 
     private long positiveDifference(long durableCount, long checkpointCount) {

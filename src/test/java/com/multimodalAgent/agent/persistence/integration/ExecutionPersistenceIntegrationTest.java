@@ -19,9 +19,11 @@ import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
 import com.multimodalAgent.agent.runtime.event.AgentEvent;
+import com.multimodalAgent.agent.runtime.event.AgentEventMetadata;
 import com.multimodalAgent.agent.runtime.event.AgentEventType;
 import com.multimodalAgent.agent.runtime.event.AgentEventPublisher;
 import com.multimodalAgent.agent.runtime.event.RecordingAgentEventPublisher;
+import com.multimodalAgent.agent.runtime.event.ToolStartedEvent;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.AgentModel;
@@ -148,6 +150,34 @@ class ExecutionPersistenceIntegrationTest {
         assertEquals("provider-call-1", execution.getToolCallId());
         assertEquals(tool.name(), execution.getToolName());
         assertEquals(ToolExecutionStatus.SUCCEEDED, execution.getStatus());
+        assertEquals(1, execution.getStartedAttemptCount());
+    }
+
+    @Test
+    void recoveryRetryIncrementsDurableAttemptCountOnTheSameToolExecution() {
+        CountingTool tool = new CountingTool("retry_tool", false, false);
+        Harness harness = harness(
+                new ScriptedAgentModel(
+                        ModelTurn.toolCall(call("retry-call", tool.name())),
+                        ModelTurn.finalAnswer("first completion")
+                ),
+                List.of(tool),
+                new DefaultToolPolicyEngine()
+        );
+        execute(harness, "retry-attempt-count", 3, Set.of(tool.name()), Set.of());
+
+        String runId = runId("retry-attempt-count");
+        store.record(new ToolStartedEvent(
+                new AgentEventMetadata(
+                        "retry-start-2", runId, 100, Instant.now(), 1
+                ),
+                "retry-call",
+                tool.name()
+        ));
+
+        assertEquals(2, executions("retry-attempt-count").get(0).getStartedAttemptCount());
+        assertEquals(2, executions("retry-attempt-count").get(0).getStartedAttemptCount(),
+                "repeated reads must not change durable attempt accounting");
     }
 
     @Test

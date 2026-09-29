@@ -40,8 +40,7 @@ class ReliableOutcomeBudgetRecoveryTest {
         );
         List<RecoveryToolEvidence> tools = List.of(
                 tool("execution-1", "call-1", RecoveryToolStatus.SUCCEEDED, 2),
-                tool("execution-2", "call-2", RecoveryToolStatus.STARTED, 4),
-                tool("execution-2", "call-2", RecoveryToolStatus.STARTED, 4)
+                tool("execution-2", "call-2", RecoveryToolStatus.STARTED, 4, 2)
         );
 
         BudgetUsage recovered = new BudgetRecoveryReconstructor()
@@ -49,12 +48,37 @@ class ReliableOutcomeBudgetRecoveryTest {
                 .usage();
 
         assertEquals(2, recovered.modelCalls());
-        assertEquals(2, recovered.toolCalls());
+        assertEquals(3, recovered.toolCalls());
         assertEquals(7, recovered.inputTokens());
         assertEquals(3, recovered.outputTokens());
         assertEquals(10, recovered.totalTokens());
         assertTrue(recovered.unknownUsageObserved());
         assertTrue(recovered.cost().isEmpty());
+    }
+
+    @Test
+    void repeatedCrashRestoresEveryStartedAttemptAndEnforcesToolCallLimit() {
+        RecoveryCheckpoint checkpoint = checkpoint(new BudgetCheckpoint(
+                1, 0, 7, 3, 10, Optional.of(new BigDecimal("0.10")), false
+        ));
+        RecoveryToolEvidence retried = tool(
+                "same-execution", "same-call", RecoveryToolStatus.STARTED, 2, 2
+        );
+
+        BudgetUsage recovered = new BudgetRecoveryReconstructor()
+                .reconstruct(checkpoint, List.of(), List.of(retried))
+                .usage();
+        BudgetSession restored = BudgetSession.restore(
+                ExecutionBudget.builder().maxToolCalls(2).build(),
+                Optional.empty(),
+                recovered
+        );
+
+        assertEquals(2, recovered.toolCalls());
+        assertEquals(BudgetDimension.TOOL_CALLS,
+                restored.admitToolCall().orElseThrow().dimension());
+        assertEquals(BudgetBlockReason.EXHAUSTED,
+                restored.admitToolCall().orElseThrow().reason());
     }
 
     @Test
@@ -199,6 +223,27 @@ class ReliableOutcomeBudgetRecoveryTest {
                 "tool",
                 status,
                 true
+        );
+    }
+
+    private RecoveryToolEvidence tool(
+            String executionId,
+            String toolCallId,
+            RecoveryToolStatus status,
+            int stepIndex,
+            long startedAttemptCount
+    ) {
+        return new RecoveryToolEvidence(
+                executionId,
+                "step-" + executionId,
+                1,
+                stepIndex,
+                toolCallId,
+                "tool",
+                status,
+                true,
+                startedAttemptCount,
+                Optional.empty()
         );
     }
 }

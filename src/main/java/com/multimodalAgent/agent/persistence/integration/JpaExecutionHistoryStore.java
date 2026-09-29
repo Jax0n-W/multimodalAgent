@@ -265,9 +265,11 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         step.setStartedAt(event.occurredAt());
         stepRepository.saveAndFlush(step);
 
-        ToolExecutionEntity execution = requireToolExecution(event.runId(), event.toolCallId());
-        execution.setStatus(ToolExecutionStatus.STARTED);
-        execution.setStartedAt(event.occurredAt());
+        ToolExecutionEntity execution = requireToolExecutionForRecoveryMutation(
+                event.runId(),
+                event.toolCallId()
+        );
+        execution.recordStartedAttempt(event.occurredAt());
         toolExecutionRepository.saveAndFlush(execution);
     }
 

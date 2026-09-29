@@ -152,6 +152,7 @@ public class JpaRecoveryEvidenceReader implements RecoveryEvidenceReader {
                     tool.getToolName(),
                     RecoveryToolStatus.valueOf(tool.getStatus().name()),
                     consistent,
+                    tool.getStartedAttemptCount(),
                     recoveryContract(tool, issues)
             ));
         }

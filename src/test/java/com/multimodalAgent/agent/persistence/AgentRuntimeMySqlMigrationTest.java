@@ -31,7 +31,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(7, result.migrationsExecuted);
+        assertEquals(8, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -67,7 +67,8 @@ class AgentRuntimeMySqlMigrationTest {
                     "recovery_contract_version",
                     "replay_semantics",
                     "reconciliation_supported",
-                    "reconciliation_strategy_id"
+                    "reconciliation_strategy_id",
+                    "started_attempt_count"
             ));
             assertColumns(connection, "agent_runtime_config_snapshots", List.of(
                     "snapshot_id", "schema_version", "config_hash", "config_json", "created_at"

@@ -12,6 +12,7 @@ public record RecoveryToolEvidence(
         String toolName,
         RecoveryToolStatus status,
         boolean linkedStepConsistent,
+        long startedAttemptCount,
         Optional<ToolRecoveryContractSnapshot> recoveryContract
 ) {
 
@@ -34,7 +35,33 @@ public record RecoveryToolEvidence(
                 toolName,
                 status,
                 linkedStepConsistent,
+                minimumStartedAttemptCount(status),
                 Optional.empty()
+        );
+    }
+
+    public RecoveryToolEvidence(
+            String executionId,
+            String stepId,
+            int iteration,
+            int stepIndex,
+            String toolCallId,
+            String toolName,
+            RecoveryToolStatus status,
+            boolean linkedStepConsistent,
+            Optional<ToolRecoveryContractSnapshot> recoveryContract
+    ) {
+        this(
+                executionId,
+                stepId,
+                iteration,
+                stepIndex,
+                toolCallId,
+                toolName,
+                status,
+                linkedStepConsistent,
+                minimumStartedAttemptCount(status),
+                recoveryContract
         );
     }
 
@@ -50,6 +77,9 @@ public record RecoveryToolEvidence(
         requireText(toolCallId, "toolCallId");
         requireText(toolName, "toolName");
         Objects.requireNonNull(status, "status must not be null");
+        if (startedAttemptCount < 0) {
+            throw new IllegalArgumentException("startedAttemptCount must not be negative");
+        }
         Objects.requireNonNull(recoveryContract, "recoveryContract must not be null");
         if (recoveryContract.isPresent()
                 && !toolName.equals(recoveryContract.orElseThrow().toolName())) {
@@ -57,6 +87,14 @@ public record RecoveryToolEvidence(
                     "Tool evidence identity must match recovery contract"
             );
         }
+    }
+
+    private static long minimumStartedAttemptCount(RecoveryToolStatus status) {
+        Objects.requireNonNull(status, "status must not be null");
+        return status == RecoveryToolStatus.STARTED
+                || status == RecoveryToolStatus.UNKNOWN
+                || status == RecoveryToolStatus.SUCCEEDED
+                || status == RecoveryToolStatus.FAILED ? 1L : 0L;
     }
 
     private static void requireText(String value, String field) {
