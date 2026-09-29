@@ -60,6 +60,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -270,6 +271,36 @@ class ToolReconciliationPersistenceTest {
     }
 
     @Test
+    void existingStartedAttemptRemainsInProgressWithoutCreatingAnotherAttempt() {
+        stateStore.materializeUnknown(RUN_ID, TOOL_CALL_ID);
+        ToolReconciliationStart started = attemptStore.start(RUN_ID, TOOL_CALL_ID, CONTRACT);
+        AtomicInteger calls = new AtomicInteger();
+        ToolReconciliationCoordinator coordinator = coordinator(new ToolReconciler() {
+            @Override
+            public String strategyId() {
+                return STRATEGY_ID;
+            }
+
+            @Override
+            public ToolReconciliationResult reconcile(ToolReconciliationContext context) {
+                calls.incrementAndGet();
+                return ToolReconciliationResult.of(
+                        ToolReconciliationOutcome.CONFIRMED_APPLIED
+                );
+            }
+        });
+
+        ToolReconciliationResolution resolution = coordinator.resolve(RUN_ID, TOOL_CALL_ID);
+
+        assertEquals(ToolReconciliationResolutionStatus.IN_PROGRESS, resolution.status());
+        assertEquals(started.attempt().orElseThrow().reconciliationId(),
+                resolution.attempt().orElseThrow().reconciliationId());
+        assertEquals(0, calls.get());
+        assertEquals(1, attemptRepository.count());
+        assertEquals(ToolExecutionStatus.UNKNOWN, tool().getStatus());
+    }
+
+    @Test
     void concurrentRetryAllocationCreatesOnlyOneNextAttempt() throws Exception {
         stateStore.materializeUnknown(RUN_ID, TOOL_CALL_ID);
         ToolReconciliationStart first = attemptStore.start(RUN_ID, TOOL_CALL_ID, CONTRACT);
@@ -317,24 +348,7 @@ class ToolReconciliationPersistenceTest {
     ) {
         stateStore.materializeUnknown(RUN_ID, TOOL_CALL_ID);
         ToolReconciliationStart start = attemptStore.start(RUN_ID, TOOL_CALL_ID, CONTRACT);
-
-        AgentEventMetadata metadata = new AgentEventMetadata(
-                "event-" + terminal,
-                RUN_ID,
-                1,
-                Instant.now(),
-                1
-        );
-        if (terminal == ToolExecutionStatus.SUCCEEDED) {
-            historyStore.record(new ToolSucceededEvent(metadata, TOOL_CALL_ID, TOOL_NAME));
-        } else {
-            historyStore.record(new ToolFailedEvent(
-                    metadata,
-                    TOOL_CALL_ID,
-                    TOOL_NAME,
-                    ToolErrorCode.EXECUTION_FAILED
-            ));
-        }
+        recordTerminal(terminal);
 
         ToolReconciliationAttempt completed = attemptStore.complete(
                 start.attempt().orElseThrow().reconciliationId(),
@@ -343,6 +357,50 @@ class ToolReconciliationPersistenceTest {
 
         assertEquals(ToolReconciliationAttemptStatus.SUPERSEDED, completed.status());
         assertEquals(terminal, tool().getStatus());
+        assertEquals(AgentRunStatus.RUNNING,
+                runRepository.findByRunId(RUN_ID).orElseThrow().getStatus());
+        assertEquals(1, attemptRepository.count());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ToolExecutionStatus.class, names = {"SUCCEEDED", "FAILED"})
+    void lateTerminalOutranksHistoricalDecisiveObservationOnFutureResolve(
+            ToolExecutionStatus terminal
+    ) {
+        stateStore.materializeUnknown(RUN_ID, TOOL_CALL_ID);
+        ToolReconciliationStart start = attemptStore.start(RUN_ID, TOOL_CALL_ID, CONTRACT);
+        ToolReconciliationAttempt decisive = attemptStore.complete(
+                start.attempt().orElseThrow().reconciliationId(),
+                ToolReconciliationResult.of(
+                        ToolReconciliationOutcome.CONFIRMED_NOT_APPLIED
+                )
+        );
+        recordTerminal(terminal);
+        AtomicInteger calls = new AtomicInteger();
+        ToolReconciliationCoordinator coordinator = coordinator(new ToolReconciler() {
+            @Override
+            public String strategyId() {
+                return STRATEGY_ID;
+            }
+
+            @Override
+            public ToolReconciliationResult reconcile(ToolReconciliationContext context) {
+                calls.incrementAndGet();
+                return ToolReconciliationResult.of(ToolReconciliationOutcome.UNRESOLVED);
+            }
+        });
+
+        ToolReconciliationResolution resolution = coordinator.resolve(RUN_ID, TOOL_CALL_ID);
+
+        assertEquals(ToolReconciliationAttemptStatus.COMPLETED, decisive.status());
+        assertEquals(ToolReconciliationOutcome.CONFIRMED_NOT_APPLIED,
+                decisive.outcome().orElseThrow());
+        assertEquals(ToolReconciliationResolutionStatus.NOT_AMBIGUOUS, resolution.status());
+        assertTrue(resolution.plan().isEmpty());
+        assertTrue(resolution.attempt().isEmpty());
+        assertEquals(0, calls.get());
+        assertEquals(terminal, tool().getStatus());
+        assertEquals(1, attemptRepository.count());
     }
 
     private ToolReconciliationCoordinator coordinator(ToolReconciler reconciler) {
@@ -362,6 +420,26 @@ class ToolReconciliationPersistenceTest {
         ToolExecutionEntity execution = tool();
         execution.setStatus(status);
         toolRepository.saveAndFlush(execution);
+    }
+
+    private void recordTerminal(ToolExecutionStatus terminal) {
+        AgentEventMetadata metadata = new AgentEventMetadata(
+                "event-" + terminal,
+                RUN_ID,
+                1,
+                Instant.now(),
+                1
+        );
+        if (terminal == ToolExecutionStatus.SUCCEEDED) {
+            historyStore.record(new ToolSucceededEvent(metadata, TOOL_CALL_ID, TOOL_NAME));
+            return;
+        }
+        historyStore.record(new ToolFailedEvent(
+                metadata,
+                TOOL_CALL_ID,
+                TOOL_NAME,
+                ToolErrorCode.EXECUTION_FAILED
+        ));
     }
 
     private ToolExecutionEntity tool() {

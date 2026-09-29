@@ -92,45 +92,57 @@ public final class ToolReconciliationCoordinator {
                     start.attempt()
             );
         }
-        if (start.disposition() != ToolReconciliationStartDisposition.STARTED) {
+        if (start.disposition() == ToolReconciliationStartDisposition.ALREADY_TERMINAL
+                || start.disposition() == ToolReconciliationStartDisposition.NOT_AMBIGUOUS) {
             return new ToolReconciliationResolution(
                     materialization,
-                    Optional.of(plan),
+                    Optional.empty(),
                     ToolReconciliationResolutionStatus.NOT_AMBIGUOUS,
                     Optional.empty()
             );
         }
+        if (start.disposition() != ToolReconciliationStartDisposition.STARTED) {
+            throw new IllegalStateException(
+                    "Unsupported reconciliation start disposition: "
+                            + start.disposition()
+            );
+        }
 
         ToolReconciliationAttempt attempt = start.attempt().orElseThrow();
+        authorityGuard.assertAuthority(runId);
+        ToolReconciliationResult result;
         try {
-            authorityGuard.assertAuthority(runId);
-            ToolReconciliationResult result = Objects.requireNonNull(
+            result = Objects.requireNonNull(
                     reconciler.reconcile(attempt.context(evidence.toolName())),
                     "ToolReconciler returned a null result"
             );
-            authorityGuard.assertAuthority(runId);
-            ToolReconciliationAttempt completed = attemptStore.complete(
+        } catch (RuntimeException reconciliationFailure) {
+            failAttemptIfAuthorized(runId, attempt, reconciliationFailure);
+            throw reconciliationFailure(runId, toolCallId, reconciliationFailure);
+        }
+
+        authorityGuard.assertAuthority(runId);
+        ToolReconciliationAttempt completed;
+        try {
+            completed = attemptStore.complete(
                     attempt.reconciliationId(),
                     result
             );
-            ToolReconciliationResolutionStatus status = completed.status()
-                    == ToolReconciliationAttemptStatus.SUPERSEDED
-                    ? ToolReconciliationResolutionStatus.SUPERSEDED
-                    : ToolReconciliationResolutionStatus.COMPLETED;
             if (completed.status() != ToolReconciliationAttemptStatus.COMPLETED
                     && completed.status() != ToolReconciliationAttemptStatus.SUPERSEDED) {
                 throw new IllegalStateException(
                         "Reconciliation completion returned non-terminal attempt state"
                 );
             }
-            return resolution(materialization, plan, status, Optional.of(completed));
-        } catch (RuntimeException failure) {
-            failAttempt(attempt, failure);
-            throw new ToolReconciliationException(
-                    "Tool reconciliation failed for " + runId + "/" + toolCallId,
-                    failure
-            );
+        } catch (RuntimeException persistenceFailure) {
+            failAttemptIfAuthorized(runId, attempt, persistenceFailure);
+            throw reconciliationFailure(runId, toolCallId, persistenceFailure);
         }
+        ToolReconciliationResolutionStatus status = completed.status()
+                == ToolReconciliationAttemptStatus.SUPERSEDED
+                ? ToolReconciliationResolutionStatus.SUPERSEDED
+                : ToolReconciliationResolutionStatus.COMPLETED;
+        return resolution(materialization, plan, status, Optional.of(completed));
     }
 
     private RecoveryToolEvidence requireEvidence(String runId, String toolCallId) {
@@ -146,7 +158,17 @@ public final class ToolReconciliationCoordinator {
                 ));
     }
 
-    private void failAttempt(ToolReconciliationAttempt attempt, RuntimeException failure) {
+    private void failAttemptIfAuthorized(
+            String runId,
+            ToolReconciliationAttempt attempt,
+            RuntimeException failure
+    ) {
+        try {
+            authorityGuard.assertAuthority(runId);
+        } catch (RuntimeException authorityFailure) {
+            failure.addSuppressed(authorityFailure);
+            return;
+        }
         try {
             attemptStore.fail(
                     attempt.reconciliationId(),
@@ -158,6 +180,17 @@ public final class ToolReconciliationCoordinator {
         } catch (RuntimeException persistenceFailure) {
             failure.addSuppressed(persistenceFailure);
         }
+    }
+
+    private ToolReconciliationException reconciliationFailure(
+            String runId,
+            String toolCallId,
+            RuntimeException failure
+    ) {
+        return new ToolReconciliationException(
+                "Tool reconciliation failed for " + runId + "/" + toolCallId,
+                failure
+        );
     }
 
     private ToolReconciliationResolution resolution(
