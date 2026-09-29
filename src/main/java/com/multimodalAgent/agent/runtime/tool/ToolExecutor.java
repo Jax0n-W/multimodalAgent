@@ -39,6 +39,7 @@ public final class ToolExecutor {
     private final ToolArgumentResolver argumentResolver;
     private final ToolPolicyEngine policyEngine;
     private final ObjectMapper objectMapper;
+    private final ToolOutcomeRecorder outcomeRecorder;
 
     public ToolExecutor( // 工具执行器
             ToolRegistry toolRegistry,
@@ -46,10 +47,30 @@ public final class ToolExecutor {
             ToolPolicyEngine policyEngine,
             ObjectMapper objectMapper
     ) {
+        this(
+                toolRegistry,
+                argumentResolver,
+                policyEngine,
+                objectMapper,
+                ToolOutcomeRecorder.NOOP
+        );
+    }
+
+    public ToolExecutor(
+            ToolRegistry toolRegistry,
+            ToolArgumentResolver argumentResolver,
+            ToolPolicyEngine policyEngine,
+            ObjectMapper objectMapper,
+            ToolOutcomeRecorder outcomeRecorder
+    ) {
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry must not be null");
         this.argumentResolver = Objects.requireNonNull(argumentResolver, "argumentResolver must not be null");
         this.policyEngine = Objects.requireNonNull(policyEngine, "policyEngine must not be null");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null"); // JSON对象映射器
+        this.outcomeRecorder = Objects.requireNonNull(
+                outcomeRecorder,
+                "outcomeRecorder must not be null"
+        );
     }
 
     public ToolResult execute(ToolCall toolCall, ToolPolicyContext policyContext) {
@@ -160,6 +181,8 @@ public final class ToolExecutor {
             throw exception;
         } catch (BudgetBlockedException exception) {
             throw exception;
+        } catch (ToolOutcomeRecordingException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
             emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.EXECUTION_FAILED);
             return ToolResult.failure(
@@ -242,7 +265,8 @@ public final class ToolExecutor {
                         evaluatedDecision,
                         eventEmitter,
                         iteration,
-                        budgetSession
+                        budgetSession,
+                        runtimeContext.runId()
                 )
         );
     }
@@ -254,7 +278,8 @@ public final class ToolExecutor {
             ToolPolicyDecision decision,
             AgentEventEmitter eventEmitter,
             int iteration,
-            BudgetSession budgetSession
+            BudgetSession budgetSession,
+            String runId
     ) {
         Optional<BudgetBlock> budgetBlock = budgetSession.admitToolCall();
         if (budgetBlock.isPresent()) {
@@ -277,6 +302,19 @@ public final class ToolExecutor {
         );
         O output = tool.execute(input);
         String serializedOutput = serialize(output);
+        try {
+            outcomeRecorder.recordSuccess(
+                    runId,
+                    toolCall.id(),
+                    toolCall.name(),
+                    serializedOutput
+            );
+        } catch (RuntimeException exception) {
+            throw new ToolOutcomeRecordingException(
+                    "Exact tool outcome could not be made durable",
+                    exception
+            );
+        }
         eventEmitter.emit(
                 iteration,
                 metadata -> new ToolSucceededEvent(

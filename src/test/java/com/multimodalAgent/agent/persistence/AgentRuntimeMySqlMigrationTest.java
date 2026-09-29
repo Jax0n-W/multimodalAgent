@@ -31,7 +31,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(6, result.migrationsExecuted);
+        assertEquals(7, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -44,13 +44,14 @@ class AgentRuntimeMySqlMigrationTest {
                            'tool_executions',
                            'agent_runtime_config_snapshots',
                            'agent_recovery_checkpoints',
-                           'tool_reconciliation_attempts'
+                           'tool_reconciliation_attempts',
+                           'tool_execution_outcomes'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(6, resultSet.getInt(1));
+                assertEquals(7, resultSet.getInt(1));
             }
         }
 
@@ -81,6 +82,10 @@ class AgentRuntimeMySqlMigrationTest {
                     "attempt_no", "contract_id", "strategy_id", "status", "outcome",
                     "external_reference", "evidence_summary", "error_code", "error_message",
                     "started_at", "completed_at", "created_at"
+            ));
+            assertColumns(connection, "tool_execution_outcomes", List.of(
+                    "execution_id", "run_id", "tool_call_id", "tool_name",
+                    "result_payload", "payload_hash", "recorded_at", "schema_version"
             ));
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
@@ -135,6 +140,20 @@ class AgentRuntimeMySqlMigrationTest {
                     "tool_reconciliation_attempts",
                     "fk_tool_reconciliation_attempts_execution",
                     "tool_execution_id",
+                    "tool_executions",
+                    "execution_id"
+            );
+            assertUniqueIndex(
+                    connection,
+                    "tool_execution_outcomes",
+                    "uk_tool_execution_outcomes_execution",
+                    List.of("execution_id")
+            );
+            assertForeignKey(
+                    connection,
+                    "tool_execution_outcomes",
+                    "fk_tool_execution_outcomes_execution",
+                    "execution_id",
                     "tool_executions",
                     "execution_id"
             );

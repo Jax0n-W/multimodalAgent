@@ -40,6 +40,7 @@ import com.multimodalAgent.agent.runtime.model.gateway.ModelInvocationTelemetryS
 import com.multimodalAgent.agent.runtime.model.gateway.ModelTimeoutPolicy;
 import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
+import com.multimodalAgent.agent.runtime.tool.ToolOutcomeRecorder;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
 import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
 import com.multimodalAgent.agent.service.knowledge.KnowledgeService;
@@ -215,6 +216,7 @@ public class StreamingAgentExecutionConfiguration {
             ExecutionConfigSnapshotStore snapshotStore,
             RecoveryCheckpointStore recoveryCheckpointStore,
             ToolRecoveryContractBindingMiddleware toolRecoveryContractBindingMiddleware,
+            ToolOutcomeRecorder toolOutcomeRecorder,
             ObjectProvider<RunLeaseStore> leaseStoreProvider,
             ObjectProvider<RunLeaseWatchdogFactory> watchdogFactoryProvider
     ) {
@@ -222,7 +224,8 @@ public class StreamingAgentExecutionConfiguration {
                 new ToolRegistry(List.of(new KnowledgeSearchTool(knowledgeService))),
                 new ToolArgumentResolver(objectMapper, validator),
                 new DefaultToolPolicyEngine(),
-                objectMapper
+                objectMapper,
+                toolOutcomeRecorder
         );
         AgentEventStreamBridge streamBridge = new AgentEventStreamBridge(publisher);
         AgentEventPublisher combinedPublisher = event -> {

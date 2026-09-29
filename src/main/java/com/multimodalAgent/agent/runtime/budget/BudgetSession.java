@@ -21,6 +21,7 @@ public final class BudgetSession {
     private long totalTokens;
     private BigDecimal cost = BigDecimal.ZERO;
     private boolean unknownUsageObserved;
+    private boolean recoveredCostUnavailable;
 
     public BudgetSession(ExecutionBudget budget, Optional<ModelIdentity> modelIdentity) {
         this(budget, modelIdentity, new ModelCostCalculator());
@@ -38,6 +39,25 @@ public final class BudgetSession {
         this.costCalculator = Objects.requireNonNull(
                 costCalculator, "costCalculator must not be null"
         );
+    }
+
+    /** Rehydrates confirmed consumption; recovered counters are never reset to zero. */
+    public static BudgetSession restore(
+            ExecutionBudget budget,
+            Optional<ModelIdentity> modelIdentity,
+            BudgetUsage recoveredUsage
+    ) {
+        Objects.requireNonNull(recoveredUsage, "recoveredUsage must not be null");
+        BudgetSession session = new BudgetSession(budget, modelIdentity);
+        session.modelCalls = recoveredUsage.modelCalls();
+        session.toolCalls = recoveredUsage.toolCalls();
+        session.inputTokens = recoveredUsage.inputTokens();
+        session.outputTokens = recoveredUsage.outputTokens();
+        session.totalTokens = recoveredUsage.totalTokens();
+        session.cost = recoveredUsage.cost().orElse(BigDecimal.ZERO);
+        session.unknownUsageObserved = recoveredUsage.unknownUsageObserved();
+        session.recoveredCostUnavailable = recoveredUsage.cost().isEmpty();
+        return session;
     }
 
     public Optional<BudgetBlock> admitModelCall() {
@@ -111,7 +131,8 @@ public final class BudgetSession {
         if (budget.pricing().isEmpty()
                 || modelIdentity.isEmpty()
                 || !budget.pricing().get().identity().equals(modelIdentity.get())
-                || unknownUsageObserved) {
+                || unknownUsageObserved
+                || recoveredCostUnavailable) {
             return Optional.empty();
         }
         return Optional.of(cost);
@@ -178,7 +199,8 @@ public final class BudgetSession {
         if (budget.pricing().isEmpty()
                 || modelIdentity.isEmpty()
                 || !budget.pricing().get().identity().equals(modelIdentity.get())
-                || unknownUsageObserved) {
+                || unknownUsageObserved
+                || recoveredCostUnavailable) {
             return Optional.of(BudgetBlock.unverifiable(BudgetDimension.COST, costLimit));
         }
         if (cost.compareTo(costLimit) >= 0) {
