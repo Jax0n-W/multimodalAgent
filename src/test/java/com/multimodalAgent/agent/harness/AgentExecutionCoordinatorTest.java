@@ -133,7 +133,12 @@ class AgentExecutionCoordinatorTest {
         assertEquals(42L, runContext.get().userId());
         assertEquals("config-snapshot-1", runContext.get().runtimeConfigSnapshotId());
         assertEquals(new ModelCallMetadata(1, 1), modelMetadata.get());
-        assertEquals(new ToolExecutionMetadata("call-context", "context_tool", 1),
+        assertEquals(new ToolExecutionMetadata(
+                        "call-context",
+                        "context_tool",
+                        1,
+                        tool.descriptor().recoveryContract().snapshot("context_tool")
+                ),
                 toolMetadata.get());
     }
 

@@ -19,6 +19,9 @@ import com.multimodalAgent.agent.recovery.RecoveryRunEvidence;
 import com.multimodalAgent.agent.recovery.RecoveryRunStatus;
 import com.multimodalAgent.agent.recovery.RecoveryToolEvidence;
 import com.multimodalAgent.agent.recovery.RecoveryToolStatus;
+import com.multimodalAgent.agent.recovery.ToolReconciliationSupport;
+import com.multimodalAgent.agent.recovery.ToolRecoveryContractSnapshot;
+import com.multimodalAgent.agent.recovery.ToolReplaySemantics;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -148,7 +151,8 @@ public class JpaRecoveryEvidenceReader implements RecoveryEvidenceReader {
                     tool.getToolCallId(),
                     tool.getToolName(),
                     RecoveryToolStatus.valueOf(tool.getStatus().name()),
-                    consistent
+                    consistent,
+                    recoveryContract(tool, issues)
             ));
         }
         if (steps.stream().anyMatch(step -> step.getStepType() == AgentStepType.TOOL
@@ -156,6 +160,40 @@ public class JpaRecoveryEvidenceReader implements RecoveryEvidenceReader {
             issues.add(RecoveryEvidenceIssue.TOOL_EXECUTION_MISSING);
         }
         return List.copyOf(result);
+    }
+
+    private Optional<ToolRecoveryContractSnapshot> recoveryContract(
+            ToolExecutionEntity tool,
+            List<RecoveryEvidenceIssue> issues
+    ) {
+        if (!tool.hasAnyRecoveryContractField()) {
+            return Optional.empty();
+        }
+        try {
+            if (tool.getRecoveryContractId() == null
+                    || tool.getRecoveryContractSchemaVersion() == null
+                    || tool.getRecoveryContractVersion() == null
+                    || tool.getReplaySemantics() == null
+                    || tool.getReconciliationSupported() == null) {
+                throw new IllegalArgumentException("Partial recovery contract binding");
+            }
+            ToolReconciliationSupport reconciliationSupport =
+                    tool.getReconciliationSupported()
+                            ? ToolReconciliationSupport.SUPPORTED
+                            : ToolReconciliationSupport.UNSUPPORTED;
+            return Optional.of(new ToolRecoveryContractSnapshot(
+                    tool.getToolName(),
+                    tool.getRecoveryContractVersion(),
+                    ToolReplaySemantics.valueOf(tool.getReplaySemantics()),
+                    reconciliationSupport,
+                    Optional.ofNullable(tool.getReconciliationStrategyId()),
+                    tool.getRecoveryContractId(),
+                    tool.getRecoveryContractSchemaVersion()
+            ));
+        } catch (RuntimeException exception) {
+            issues.add(RecoveryEvidenceIssue.TOOL_RECOVERY_CONTRACT_INVALID);
+            return Optional.empty();
+        }
     }
 
     private static void requireText(String value, String field) {

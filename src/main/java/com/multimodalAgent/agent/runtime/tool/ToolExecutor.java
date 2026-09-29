@@ -229,7 +229,12 @@ public final class ToolExecutor {
 
         return middlewareChain.aroundToolExecution(
                 runtimeContext,
-                new ToolExecutionMetadata(toolCall.id(), toolCall.name(), iteration),
+                new ToolExecutionMetadata(
+                        toolCall.id(),
+                        toolCall.name(),
+                        iteration,
+                        tool.descriptor().recoveryContract().snapshot(toolCall.name())
+                ),
                 () -> executeAllowedTool(
                         tool,
                         input,

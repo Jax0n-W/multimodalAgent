@@ -216,6 +216,45 @@ class RecoveryEligibilityEvaluatorTest {
     }
 
     @Test
+    void recoveryContractDoesNotChangeStartedOrUnknownEligibility() {
+        ToolRecoveryContractSnapshot replaySafe = ToolRecoveryContract.defaults(true, true)
+                .snapshot(CALL.name());
+        for (RecoveryToolStatus status : List.of(
+                RecoveryToolStatus.STARTED,
+                RecoveryToolStatus.UNKNOWN
+        )) {
+            RecoveryToolEvidence tool = new RecoveryToolEvidence(
+                    "exec-contract-" + status,
+                    "tool-step-contract-" + status,
+                    1,
+                    2,
+                    CALL.id(),
+                    CALL.name(),
+                    status,
+                    true,
+                    Optional.of(replaySafe)
+            );
+
+            RecoveryDecision decision = evaluator.evaluate(evidence(
+                    run(RecoveryRunStatus.RUNNING, 1),
+                    Optional.of(toolCallCheckpoint(
+                            1,
+                            RecoveryCheckpointBoundary.AFTER_MODEL_OUTCOME
+                    )),
+                    List.of(model(1, 1, RecoveryModelStatus.SUCCEEDED)),
+                    List.of(tool),
+                    List.of()
+            ));
+
+            assertDecision(
+                    decision,
+                    RecoveryDisposition.REQUIRES_RECONCILIATION,
+                    RecoveryReason.AMBIGUOUS_TOOL_EXECUTION
+            );
+        }
+    }
+
+    @Test
     void confirmedToolOutcomeMustHaveExactCheckpointResult() {
         RecoveryEvidence covered = evidence(
                 run(RecoveryRunStatus.RUNNING, 1),

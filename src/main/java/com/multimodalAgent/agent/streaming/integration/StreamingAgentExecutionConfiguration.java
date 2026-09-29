@@ -24,6 +24,7 @@ import com.multimodalAgent.agent.persistence.integration.PersistentAgentExecutio
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointStore;
 import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointRuntimeMiddleware;
 import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointingAgentExecutionCoordinator;
+import com.multimodalAgent.agent.recovery.integration.ToolRecoveryContractBindingMiddleware;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
@@ -213,6 +214,7 @@ public class StreamingAgentExecutionConfiguration {
             ExecutionConfigSnapshotFactory snapshotFactory,
             ExecutionConfigSnapshotStore snapshotStore,
             RecoveryCheckpointStore recoveryCheckpointStore,
+            ToolRecoveryContractBindingMiddleware toolRecoveryContractBindingMiddleware,
             ObjectProvider<RunLeaseStore> leaseStoreProvider,
             ObjectProvider<RunLeaseWatchdogFactory> watchdogFactoryProvider
     ) {
@@ -247,6 +249,7 @@ public class StreamingAgentExecutionConfiguration {
             middleware.add(new ExecutionCoordinationBoundaryMiddleware());
         }
         middleware.add(new RecoveryCheckpointRuntimeMiddleware(persistence::assertHealthy));
+        middleware.add(toolRecoveryContractBindingMiddleware);
         middleware.add(persistence.boundaryMiddleware());
         AgentExecutionCoordinator core = new AgentExecutionCoordinator(
                 runner,

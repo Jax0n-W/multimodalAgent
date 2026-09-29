@@ -1,6 +1,7 @@
 package com.multimodalAgent.agent.persistence.entity;
 
 import com.multimodalAgent.agent.persistence.model.ToolExecutionStatus;
+import com.multimodalAgent.agent.recovery.ToolRecoveryContractSnapshot;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -44,6 +45,24 @@ public class ToolExecutionEntity {
 
     @Column(name = "idempotency_key", length = 160)
     private String idempotencyKey;
+
+    @Column(name = "recovery_contract_id", length = 96)
+    private String recoveryContractId;
+
+    @Column(name = "recovery_contract_schema_version")
+    private Integer recoveryContractSchemaVersion;
+
+    @Column(name = "recovery_contract_version", length = 64)
+    private String recoveryContractVersion;
+
+    @Column(name = "replay_semantics", length = 32)
+    private String replaySemantics;
+
+    @Column(name = "reconciliation_supported")
+    private Boolean reconciliationSupported;
+
+    @Column(name = "reconciliation_strategy_id", length = 160)
+    private String reconciliationStrategyId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)
@@ -147,6 +166,53 @@ public class ToolExecutionEntity {
 
     public void setIdempotencyKey(String idempotencyKey) {
         this.idempotencyKey = idempotencyKey;
+    }
+
+    public String getRecoveryContractId() {
+        return recoveryContractId;
+    }
+
+    public Integer getRecoveryContractSchemaVersion() {
+        return recoveryContractSchemaVersion;
+    }
+
+    public String getRecoveryContractVersion() {
+        return recoveryContractVersion;
+    }
+
+    public String getReplaySemantics() {
+        return replaySemantics;
+    }
+
+    public Boolean getReconciliationSupported() {
+        return reconciliationSupported;
+    }
+
+    public String getReconciliationStrategyId() {
+        return reconciliationStrategyId;
+    }
+
+    public void bindRecoveryContract(ToolRecoveryContractSnapshot contract) {
+        Objects.requireNonNull(contract, "contract must not be null");
+        if (hasAnyRecoveryContractField()) {
+            throw new IllegalStateException("Recovery contract is already bound");
+        }
+        recoveryContractId = contract.contractId();
+        recoveryContractSchemaVersion = contract.schemaVersion();
+        recoveryContractVersion = contract.contractVersion();
+        replaySemantics = contract.replaySemantics().name();
+        reconciliationSupported = contract.reconciliationSupport()
+                == com.multimodalAgent.agent.recovery.ToolReconciliationSupport.SUPPORTED;
+        reconciliationStrategyId = contract.reconciliationStrategyId().orElse(null);
+    }
+
+    public boolean hasAnyRecoveryContractField() {
+        return recoveryContractId != null
+                || recoveryContractSchemaVersion != null
+                || recoveryContractVersion != null
+                || replaySemantics != null
+                || reconciliationSupported != null
+                || reconciliationStrategyId != null;
     }
 
     public ToolExecutionStatus getStatus() {
