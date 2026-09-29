@@ -163,6 +163,28 @@ public class JpaToolReconciliationAttemptStore
         return attempt.snapshot();
     }
 
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int abandonStarted(String runId, String toolCallId) {
+        ToolExecutionEntity execution = requireLockedExecution(runId, toolCallId);
+        List<ToolReconciliationAttemptEntity> attempts = attemptRepository
+                .findByToolExecutionIdOrderByAttemptNoDesc(execution.getExecutionId());
+        int abandoned = 0;
+        for (ToolReconciliationAttemptEntity attempt : attempts) {
+            if (attempt.getStatus() == ToolReconciliationAttemptStatus.STARTED) {
+                ToolReconciliationAttemptEntity locked = requireLockedAttempt(
+                        attempt.getReconciliationId()
+                );
+                if (locked.getStatus() == ToolReconciliationAttemptStatus.STARTED) {
+                    locked.abandon(Instant.now());
+                    attemptRepository.saveAndFlush(locked);
+                    abandoned++;
+                }
+            }
+        }
+        return abandoned;
+    }
+
     private ToolExecutionEntity requireLockedExecution(String runId, String toolCallId) {
         return toolRepository.findForRecoveryMutation(runId, toolCallId)
                 .orElseThrow(() -> new IllegalStateException(

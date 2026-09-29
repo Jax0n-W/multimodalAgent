@@ -1,6 +1,10 @@
 package com.multimodalAgent.agent.recovery.integration;
 
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
+import com.multimodalAgent.agent.harness.AgentRuntimeContextContributor;
+import com.multimodalAgent.agent.recovery.RecoveryCheckpoint;
+import com.multimodalAgent.agent.runtime.AgentRunSpec;
+import com.multimodalAgent.agent.runtime.budget.BudgetUsage;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointStore;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.runtime.model.gateway.ModelIdentity;
@@ -55,5 +59,20 @@ public final class RecoveryCheckpointingAgentExecutionCoordinator {
                         session
                 )
         ));
+    }
+
+    public static AgentRuntimeContextContributor resumeSessionContributor(
+            AgentRunSpec spec,
+            RecoveryCheckpoint checkpoint,
+            BudgetUsage recoveredUsage,
+            Optional<ModelIdentity> modelIdentity,
+            RecoveryCheckpointStore store
+    ) {
+        RecoveryCheckpointSession session = new RecoveryCheckpointSession(
+                spec, checkpoint, recoveredUsage, modelIdentity, store, Clock.systemUTC()
+        );
+        return context -> context.attributes().put(
+                RecoveryCheckpointRuntimeMiddleware.SESSION, session
+        );
     }
 }

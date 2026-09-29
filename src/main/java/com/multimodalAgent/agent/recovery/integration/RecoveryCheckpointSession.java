@@ -27,7 +27,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /** Mutable execution-scoped mirror of the continuation state owned by AgentRunner. */
-final class RecoveryCheckpointSession {
+public final class RecoveryCheckpointSession {
 
     private final AgentRunSpec spec;
     private final String runtimeConfigSnapshotId;
@@ -63,6 +63,30 @@ final class RecoveryCheckpointSession {
         this.store = Objects.requireNonNull(store, "store must not be null");
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
         this.messages = new ArrayList<>(spec.messages());
+    }
+
+    public RecoveryCheckpointSession(
+            AgentRunSpec spec,
+            RecoveryCheckpoint checkpoint,
+            BudgetUsage recoveredUsage,
+            Optional<ModelIdentity> modelIdentity,
+            RecoveryCheckpointStore store,
+            Clock clock
+    ) {
+        this.spec = Objects.requireNonNull(spec, "spec must not be null");
+        Objects.requireNonNull(checkpoint, "checkpoint must not be null");
+        if (!spec.runId().equals(checkpoint.runId())) {
+            throw new IllegalArgumentException("Checkpoint run identity mismatch");
+        }
+        this.runtimeConfigSnapshotId = checkpoint.runtimeConfigSnapshotId();
+        this.modelIdentity = Objects.requireNonNull(modelIdentity, "modelIdentity must not be null");
+        this.store = Objects.requireNonNull(store, "store must not be null");
+        this.clock = Objects.requireNonNull(clock, "clock must not be null");
+        this.messages = new ArrayList<>(checkpoint.messages());
+        this.toolsUsed.addAll(checkpoint.toolsUsed());
+        this.seenToolCallIds.addAll(checkpoint.seenToolCallIds());
+        this.checkpointSequence = checkpoint.sequence();
+        apply(Objects.requireNonNull(recoveredUsage, "recoveredUsage must not be null"));
     }
 
     synchronized void iterationBoundary(int completedIteration) {

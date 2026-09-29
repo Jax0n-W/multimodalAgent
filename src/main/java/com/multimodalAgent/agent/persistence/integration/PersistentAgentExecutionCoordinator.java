@@ -2,6 +2,7 @@ package com.multimodalAgent.agent.persistence.integration;
 
 import com.multimodalAgent.agent.harness.AgentExecutionCoordinator;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
+import com.multimodalAgent.agent.harness.RecoveryExecutionRequest;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 
 import java.util.Objects;
@@ -9,7 +10,7 @@ import java.util.Objects;
 /**
  * Durable admission/finalization boundary around the existing execution coordinator.
  */
-public final class PersistentAgentExecutionCoordinator {
+public class PersistentAgentExecutionCoordinator {
 
     private final AgentExecutionCoordinator delegate;
     private final ExecutionHistoryStore store;
@@ -32,6 +33,29 @@ public final class PersistentAgentExecutionCoordinator {
         try {
             admit(request);
             AgentRunResult result = delegate.execute(request);
+            failures.throwIfFailed(runId);
+            finalizeRun(runId, result);
+            return result;
+        } catch (RuntimeException exception) {
+            ExecutionPersistenceException persistenceFailure = failures.failure(runId)
+                    .orElse(null);
+            if (persistenceFailure != null) {
+                throw persistenceFailure;
+            }
+            throw exception;
+        } finally {
+            failures.close(runId);
+        }
+    }
+
+    /** Opens the persistence failure boundary for an existing run without admitting another run. */
+    public AgentRunResult resumeExisting(RecoveryExecutionRequest request) {
+        Objects.requireNonNull(request, "request must not be null");
+        String runId = request.runSpec().runId();
+        failures.open(runId);
+        try {
+            store.assertExistingRunning(runId, request.runtimeConfigSnapshotId());
+            AgentRunResult result = delegate.resume(request);
             failures.throwIfFailed(runId);
             finalizeRun(runId, result);
             return result;

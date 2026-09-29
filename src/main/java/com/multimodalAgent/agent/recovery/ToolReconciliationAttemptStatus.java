@@ -4,5 +4,6 @@ public enum ToolReconciliationAttemptStatus {
     STARTED,
     COMPLETED,
     FAILED,
+    ABANDONED,
     SUPERSEDED
 }

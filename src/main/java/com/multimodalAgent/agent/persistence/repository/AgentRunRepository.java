@@ -1,6 +1,7 @@
 package com.multimodalAgent.agent.persistence.repository;
 
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
+import com.multimodalAgent.agent.persistence.model.AgentRunStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -25,4 +26,6 @@ public interface AgentRunRepository extends JpaRepository<AgentRunEntity, Long> 
     Optional<AgentRunEntity> findByRequestId(String requestId);
 
     List<AgentRunEntity> findBySessionIdOrderByCreatedAtDesc(String sessionId);
+
+    List<AgentRunEntity> findByStatusOrderByCreatedAtAsc(AgentRunStatus status);
 }

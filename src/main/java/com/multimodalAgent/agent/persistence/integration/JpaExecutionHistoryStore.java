@@ -170,6 +170,22 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         runRepository.saveAndFlush(run);
     }
 
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public void assertExistingRunning(String runId, String runtimeConfigSnapshotId) {
+        AgentRunEntity run = requireRun(runId);
+        if (run.getStatus() != AgentRunStatus.RUNNING) {
+            throw new ExecutionPersistenceException(
+                    "Existing AgentRun is not RUNNING: " + runId
+            );
+        }
+        if (!Objects.equals(run.getRuntimeConfigSnapshotId(), runtimeConfigSnapshotId)) {
+            throw new ExecutionPersistenceException(
+                    "Existing AgentRun snapshot identity mismatch: " + runId
+            );
+        }
+    }
+
     private void recordModelStarted(AgentRunEntity run, AgentEvent event) {
         updateRunProgress(run, event.iteration(), AgentRunPhase.MODEL_RUNNING);
         AgentStepEntity step = new AgentStepEntity(

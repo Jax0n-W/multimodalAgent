@@ -197,6 +197,14 @@ public class ToolReconciliationAttemptEntity {
         this.completedAt = Objects.requireNonNull(completedAt, "completedAt must not be null");
     }
 
+    public void abandon(Instant completedAt) {
+        requireStarted();
+        status = ToolReconciliationAttemptStatus.ABANDONED;
+        errorCode = "RECOVERY_OWNERSHIP_TAKEOVER";
+        errorMessage = "Prior reconciliation owner ended before completion";
+        this.completedAt = Objects.requireNonNull(completedAt, "completedAt must not be null");
+    }
+
     public ToolReconciliationAttempt snapshot() {
         return new ToolReconciliationAttempt(
                 reconciliationId,

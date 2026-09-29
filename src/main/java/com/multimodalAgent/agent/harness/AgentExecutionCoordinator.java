@@ -17,7 +17,7 @@ import java.util.Objects;
  * {@code RUN_COMPLETED}, this coordinator propagates the middleware-origin failure without
  * rewriting the completed core outcome or emitting another terminal event.</p>
  */
-public final class AgentExecutionCoordinator {
+public class AgentExecutionCoordinator {
 
     private final AgentRunner agentRunner;
     private final RuntimeMiddlewareChain middlewareChain;
@@ -51,6 +51,23 @@ public final class AgentExecutionCoordinator {
         return middlewareChain.aroundRun(
                 context,
                 () -> agentRunner.run(spec, context, middlewareChain)
+        );
+    }
+
+    public AgentRunResult resume(RecoveryExecutionRequest request) {
+        Objects.requireNonNull(request, "request must not be null");
+        AgentRunSpec spec = request.runSpec();
+        AgentRuntimeContext context = new AgentRuntimeContext(
+                spec.runId(), null, spec.sessionId(), null,
+                request.runtimeConfigSnapshotId(), request.cancellationContext(),
+                new RuntimeAttributes()
+        );
+        for (AgentRuntimeContextContributor contributor : request.runtimeContextContributors()) {
+            contributor.contribute(context);
+        }
+        return middlewareChain.aroundRun(
+                context,
+                () -> agentRunner.resume(spec, request.resumeState(), context, middlewareChain)
         );
     }
 }

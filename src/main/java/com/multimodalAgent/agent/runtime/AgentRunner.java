@@ -94,6 +94,25 @@ public final class AgentRunner {
             AgentRuntimeContext runtimeContext,
             RuntimeMiddlewareChain middlewareChain
     ) {
+        return execute(spec, runtimeContext, middlewareChain, null);
+    }
+
+    public AgentRunResult resume(
+            AgentRunSpec spec,
+            AgentResumeState resumeState,
+            AgentRuntimeContext runtimeContext,
+            RuntimeMiddlewareChain middlewareChain
+    ) {
+        Objects.requireNonNull(resumeState, "resumeState must not be null");
+        return execute(spec, runtimeContext, middlewareChain, resumeState);
+    }
+
+    private AgentRunResult execute(
+            AgentRunSpec spec,
+            AgentRuntimeContext runtimeContext,
+            RuntimeMiddlewareChain middlewareChain,
+            AgentResumeState resumeState
+    ) {
         Objects.requireNonNull(spec, "spec must not be null");
         Objects.requireNonNull(runtimeContext, "runtimeContext must not be null");
         Objects.requireNonNull(middlewareChain, "middlewareChain must not be null");
@@ -102,13 +121,24 @@ public final class AgentRunner {
             throw new IllegalArgumentException("Runtime context identity must match AgentRunSpec");
         }
         AgentEventEmitter eventEmitter = new AgentEventEmitter(spec.runId(), eventPublisher);
-        eventEmitter.emit(0, RunStartedEvent::new);
-        BudgetSession budgetSession = new BudgetSession(spec.budget(), modelIdentity());
+        if (resumeState == null) {
+            eventEmitter.emit(0, RunStartedEvent::new);
+        }
+        BudgetSession budgetSession = resumeState == null
+                ? new BudgetSession(spec.budget(), modelIdentity())
+                : BudgetSession.restore(spec.budget(), modelIdentity(), resumeState.budgetUsage());
         try {
-            List<AgentMessage> messages = new ArrayList<>(spec.messages());
-            Set<String> toolsUsed = new LinkedHashSet<>();
-            Set<String> seenToolCallIds = new LinkedHashSet<>();
-            TokenUsage totalUsage = TokenUsage.ZERO;
+            List<AgentMessage> messages = new ArrayList<>(
+                    resumeState == null ? spec.messages() : resumeState.messages()
+            );
+            Set<String> toolsUsed = new LinkedHashSet<>(
+                    resumeState == null ? Set.of() : resumeState.toolsUsed()
+            );
+            Set<String> seenToolCallIds = new LinkedHashSet<>(
+                    resumeState == null ? Set.of() : resumeState.seenToolCallIds()
+            );
+            TokenUsage totalUsage = resumeState == null
+                    ? TokenUsage.ZERO : resumeState.totalTokenUsage();
             ToolPolicyContext policyContext = new ToolPolicyContext(
                     spec.runId(),
                     spec.sessionId(),
@@ -116,7 +146,23 @@ public final class AgentRunner {
                     spec.approvedToolCallIds()
             );
 
-            for (int iteration = 1; iteration <= spec.maxIterations(); iteration++) {
+            int firstModelIteration = 1;
+            if (resumeState != null) {
+                if (!resumeState.pendingToolCalls().isEmpty()) {
+                    AgentRunResult terminal = executeToolCalls(
+                            spec, runtimeContext, middlewareChain, eventEmitter, policyContext,
+                            budgetSession, resumeState.currentIteration(), messages, toolsUsed,
+                            totalUsage, resumeState.pendingToolCalls(),
+                            resumeState.requestedToolCallIds()
+                    );
+                    if (terminal != null) {
+                        return terminal;
+                    }
+                }
+                firstModelIteration = resumeState.currentIteration() + 1;
+            }
+
+            for (int iteration = firstModelIteration; iteration <= spec.maxIterations(); iteration++) {
             if (RuntimeCancellation.requested(runtimeContext, ExecutionCheckpoint.BEFORE_MODEL)) {
                 return cancelled(
                         runtimeContext, iteration - 1, iteration,
@@ -249,116 +295,14 @@ public final class AgentRunner {
                         )
                 );
             }
-            for (ToolCall toolCall : turn.toolCalls()) {
-                ToolResult result;
-                try {
-                    result = toolExecutor.execute(
-                            toolCall,
-                            policyContext,
-                            eventEmitter,
-                            iteration,
-                            runtimeContext,
-                            middlewareChain,
-                            budgetSession
-                    );
-                } catch (RuntimeMiddlewareFailureException exception) {
-                    return stopForMiddlewareFailure(
-                            runtimeContext,
-                            iteration,
-                            toolsUsed,
-                            messages,
-                            totalUsage,
-                            eventEmitter,
-                            iteration,
-                            exception
-                    );
-                } catch (ExecutionCancelledException exception) {
-                    return cancelled(
-                            runtimeContext, iteration, iteration,
-                            toolsUsed, messages, totalUsage, eventEmitter
-                    );
-                } catch (BudgetBlockedException exception) {
-                    return stopForBudget(
-                            runtimeContext, iteration, toolsUsed, messages, totalUsage,
-                            eventEmitter, iteration, exception.block()
-                    );
-                }
-                if (result.policyBlocked()) {
-                    RuntimeCancellation.sealCoreTerminal(runtimeContext);
-                    AgentRunResult runResult = stopped(
-                            AgentStopReason.POLICY_BLOCKED,
-                            iteration,
-                            toolsUsed,
-                            messages,
-                            totalUsage,
-                            null,
-                            result.policyDecision(),
-                            result.policyDecision().reason()
-                    );
-                    eventEmitter.emit(
-                            iteration,
-                            metadata -> new RunStoppedEvent(
-                                    metadata,
-                                    AgentStopReason.POLICY_BLOCKED,
-                                    null
-                            )
-                    );
-                    return runResult;
-                }
-                if (result.approvalRequired()) {
-                    RuntimeCancellation.sealCoreTerminal(runtimeContext);
-                    AgentRunResult runResult = stopped(
-                            AgentStopReason.WAITING_APPROVAL,
-                            iteration,
-                            toolsUsed,
-                            messages,
-                            totalUsage,
-                            null,
-                            result.policyDecision(),
-                            result.policyDecision().reason()
-                    );
-                    eventEmitter.emit(iteration, RunWaitingApprovalEvent::new);
-                    return runResult;
-                }
-
-                messages.add(AgentMessage.toolResult(
-                        toolCall.id(), toolCall.name(), result.messageForModel()
-                ));
-                if (!result.success()) {
-                    ToolErrorCode errorCode = result.error().code();
-                    if (errorCode != ToolErrorCode.TOOL_NOT_FOUND) {
-                        toolsUsed.add(toolCall.name());
-                    }
-                    RuntimeCancellation.sealCoreTerminal(runtimeContext);
-                    AgentRunResult runResult = stopped(
-                            AgentStopReason.TOOL_ERROR,
-                            iteration,
-                            toolsUsed,
-                            messages,
-                            totalUsage,
-                            errorCode,
-                            null,
-                            result.error().message()
-                    );
-                    eventEmitter.emit(
-                            iteration,
-                            metadata -> new RunStoppedEvent(
-                                    metadata,
-                                    AgentStopReason.TOOL_ERROR,
-                                    errorCode
-                            )
-                    );
-                    return runResult;
-                }
-                toolsUsed.add(toolCall.name());
-                if (RuntimeCancellation.requested(
-                        runtimeContext, ExecutionCheckpoint.AFTER_TOOL_EXECUTION
-                )) {
-                    return cancelled(
-                            runtimeContext, iteration, iteration,
-                            toolsUsed, messages, totalUsage, eventEmitter
-                    );
-                }
+            AgentRunResult terminal = executeToolCalls(
+                    spec, runtimeContext, middlewareChain, eventEmitter, policyContext,
+                    budgetSession, iteration, messages, toolsUsed, totalUsage,
+                    turn.toolCalls(), turn.toolCalls().stream()
+                            .map(ToolCall::id).collect(java.util.stream.Collectors.toSet())
+            );
+            if (terminal != null) {
+                return terminal;
             }
             }
 
@@ -390,6 +334,101 @@ public final class AgentRunner {
         } finally {
             runtimeContext.attributes().put(BudgetRuntimeAttributes.USAGE, budgetSession.usage());
         }
+    }
+
+    private AgentRunResult executeToolCalls(
+            AgentRunSpec spec,
+            AgentRuntimeContext runtimeContext,
+            RuntimeMiddlewareChain middlewareChain,
+            AgentEventEmitter eventEmitter,
+            ToolPolicyContext policyContext,
+            BudgetSession budgetSession,
+            int iteration,
+            List<AgentMessage> messages,
+            Set<String> toolsUsed,
+            TokenUsage totalUsage,
+            List<ToolCall> toolCalls,
+            Set<String> alreadyRequested
+    ) {
+        for (ToolCall toolCall : toolCalls) {
+            if (!alreadyRequested.contains(toolCall.id())) {
+                eventEmitter.emit(iteration, metadata -> new ToolRequestedEvent(
+                        metadata, toolCall.id(), toolCall.name()
+                ));
+            }
+            ToolResult result;
+            try {
+                result = toolExecutor.execute(
+                        toolCall, policyContext, eventEmitter, iteration,
+                        runtimeContext, middlewareChain, budgetSession
+                );
+            } catch (RuntimeMiddlewareFailureException exception) {
+                return stopForMiddlewareFailure(
+                        runtimeContext, iteration, toolsUsed, messages, totalUsage,
+                        eventEmitter, iteration, exception
+                );
+            } catch (ExecutionCancelledException exception) {
+                return cancelled(
+                        runtimeContext, iteration, iteration, toolsUsed, messages,
+                        totalUsage, eventEmitter
+                );
+            } catch (BudgetBlockedException exception) {
+                return stopForBudget(
+                        runtimeContext, iteration, toolsUsed, messages, totalUsage,
+                        eventEmitter, iteration, exception.block()
+                );
+            }
+            if (result.policyBlocked()) {
+                RuntimeCancellation.sealCoreTerminal(runtimeContext);
+                AgentRunResult runResult = stopped(
+                        AgentStopReason.POLICY_BLOCKED, iteration, toolsUsed, messages,
+                        totalUsage, null, result.policyDecision(),
+                        result.policyDecision().reason()
+                );
+                eventEmitter.emit(iteration, metadata -> new RunStoppedEvent(
+                        metadata, AgentStopReason.POLICY_BLOCKED, null
+                ));
+                return runResult;
+            }
+            if (result.approvalRequired()) {
+                RuntimeCancellation.sealCoreTerminal(runtimeContext);
+                AgentRunResult runResult = stopped(
+                        AgentStopReason.WAITING_APPROVAL, iteration, toolsUsed, messages,
+                        totalUsage, null, result.policyDecision(),
+                        result.policyDecision().reason()
+                );
+                eventEmitter.emit(iteration, RunWaitingApprovalEvent::new);
+                return runResult;
+            }
+            messages.add(AgentMessage.toolResult(
+                    toolCall.id(), toolCall.name(), result.messageForModel()
+            ));
+            if (!result.success()) {
+                ToolErrorCode errorCode = result.error().code();
+                if (errorCode != ToolErrorCode.TOOL_NOT_FOUND) {
+                    toolsUsed.add(toolCall.name());
+                }
+                RuntimeCancellation.sealCoreTerminal(runtimeContext);
+                AgentRunResult runResult = stopped(
+                        AgentStopReason.TOOL_ERROR, iteration, toolsUsed, messages,
+                        totalUsage, errorCode, null, result.error().message()
+                );
+                eventEmitter.emit(iteration, metadata -> new RunStoppedEvent(
+                        metadata, AgentStopReason.TOOL_ERROR, errorCode
+                ));
+                return runResult;
+            }
+            toolsUsed.add(toolCall.name());
+            if (RuntimeCancellation.requested(
+                    runtimeContext, ExecutionCheckpoint.AFTER_TOOL_EXECUTION
+            )) {
+                return cancelled(
+                        runtimeContext, iteration, iteration, toolsUsed, messages,
+                        totalUsage, eventEmitter
+                );
+            }
+        }
+        return null;
     }
 
     private ModelTurn invokeBudgetedModel(

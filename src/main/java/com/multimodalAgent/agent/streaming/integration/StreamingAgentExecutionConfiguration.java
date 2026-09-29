@@ -14,6 +14,7 @@ import com.multimodalAgent.agent.coordination.integration.ExecutionCoordinationB
 import com.multimodalAgent.agent.coordination.watchdog.RunLeaseWatchdogFactory;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotFactory;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotStore;
+import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotRestorer;
 import com.multimodalAgent.agent.execution.config.ResolvedExecutionConfigResolver;
 import com.multimodalAgent.agent.execution.config.ResolvedModelConfig;
 import com.multimodalAgent.agent.execution.config.SnapshottingAgentExecutionCoordinator;
@@ -22,6 +23,22 @@ import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceComposition;
 import com.multimodalAgent.agent.persistence.integration.PersistentAgentExecutionCoordinator;
 import com.multimodalAgent.agent.recovery.RecoveryCheckpointStore;
+import com.multimodalAgent.agent.recovery.BudgetRecoveryReconstructor;
+import com.multimodalAgent.agent.recovery.RecoveryCandidateStore;
+import com.multimodalAgent.agent.recovery.RecoveryEligibilityEvaluator;
+import com.multimodalAgent.agent.recovery.RecoveryEngine;
+import com.multimodalAgent.agent.recovery.RecoveryEvidenceReader;
+import com.multimodalAgent.agent.recovery.RecoveryScanner;
+import com.multimodalAgent.agent.recovery.RecoveryToolRepairer;
+import com.multimodalAgent.agent.recovery.ReliableToolOutcomeMaterializationStore;
+import com.multimodalAgent.agent.recovery.ReliableToolOutcomeMaterializer;
+import com.multimodalAgent.agent.recovery.ReliableToolOutcomeStore;
+import com.multimodalAgent.agent.recovery.ToolAmbiguityPlanner;
+import com.multimodalAgent.agent.recovery.ToolReconciler;
+import com.multimodalAgent.agent.recovery.ToolReconcilerRegistry;
+import com.multimodalAgent.agent.recovery.ToolReconciliationAttemptStore;
+import com.multimodalAgent.agent.recovery.ToolReconciliationCoordinator;
+import com.multimodalAgent.agent.recovery.ToolRecoveryStateStore;
 import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointRuntimeMiddleware;
 import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointingAgentExecutionCoordinator;
 import com.multimodalAgent.agent.recovery.integration.ToolRecoveryContractBindingMiddleware;
@@ -50,11 +67,13 @@ import com.multimodalAgent.agent.streaming.bridge.AgentEventStreamBridge;
 import com.multimodalAgent.agent.tool.builtin.KnowledgeSearchTool;
 import jakarta.validation.Validator;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -201,7 +220,7 @@ public class StreamingAgentExecutionConfiguration {
     }
 
     @Bean
-    public StreamingAgentExecutionService streamingAgentExecutionService(
+    public StreamingRuntimeComposition streamingRuntimeComposition(
             AgentModel model,
             ObjectMapper objectMapper,
             Validator validator,
@@ -211,12 +230,20 @@ public class StreamingAgentExecutionConfiguration {
             ExecutionStreamHub hub,
             ExecutionStreamPublisher publisher,
             LocalExecutionControlRegistry controls,
+            ResolvedModelConfig modelConfig,
             ResolvedExecutionConfigResolver configResolver,
             ExecutionConfigSnapshotFactory snapshotFactory,
             ExecutionConfigSnapshotStore snapshotStore,
             RecoveryCheckpointStore recoveryCheckpointStore,
             ToolRecoveryContractBindingMiddleware toolRecoveryContractBindingMiddleware,
             ToolOutcomeRecorder toolOutcomeRecorder,
+            RecoveryCandidateStore recoveryCandidateStore,
+            RecoveryEvidenceReader recoveryEvidenceReader,
+            ReliableToolOutcomeStore reliableToolOutcomeStore,
+            ReliableToolOutcomeMaterializationStore materializationStore,
+            ToolRecoveryStateStore toolRecoveryStateStore,
+            ToolReconciliationAttemptStore reconciliationAttemptStore,
+            ObjectProvider<ToolReconciler> reconcilerProvider,
             ObjectProvider<RunLeaseStore> leaseStoreProvider,
             ObjectProvider<RunLeaseWatchdogFactory> watchdogFactoryProvider
     ) {
@@ -282,11 +309,60 @@ public class StreamingAgentExecutionConfiguration {
                         snapshotStore,
                         checkpointing::execute
                 );
-        return new StreamingAgentExecutionService(
+        StreamingAgentExecutionService service = new StreamingAgentExecutionService(
                 snapshotting::execute,
                 hub,
                 publisher,
                 controls
         );
+        Optional<RecoveryScanner> scanner = Optional.empty();
+        if (leaseStore != null) {
+            BudgetRecoveryReconstructor budgetReconstructor = new BudgetRecoveryReconstructor();
+            RecoveryEngine engine = new RecoveryEngine(
+                    leaseStore,
+                    watchdogFactory,
+                    recoveryEvidenceReader,
+                    new RecoveryEligibilityEvaluator(),
+                    authority -> new RecoveryToolRepairer(
+                            authority,
+                            recoveryEvidenceReader,
+                            reliableToolOutcomeStore,
+                            new ReliableToolOutcomeMaterializer(authority, materializationStore),
+                            recoveryCheckpointStore,
+                            reconciliationAttemptStore,
+                            new ToolReconciliationCoordinator(
+                                    authority,
+                                    toolRecoveryStateStore,
+                                    recoveryEvidenceReader,
+                                    new ToolAmbiguityPlanner(),
+                                    new ToolReconcilerRegistry(reconcilerProvider.orderedStream().toList()),
+                                    reconciliationAttemptStore
+                            ),
+                            budgetReconstructor,
+                            Clock.systemUTC()
+                    ),
+                    budgetReconstructor,
+                    snapshotStore,
+                    new ExecutionConfigSnapshotRestorer(objectMapper),
+                    modelConfig,
+                    recoveryCheckpointStore,
+                    persistent
+            );
+            scanner = Optional.of(new RecoveryScanner(recoveryCandidateStore, engine));
+        }
+        return new StreamingRuntimeComposition(service, scanner);
     }
+
+    @Bean
+    public StreamingAgentExecutionService streamingAgentExecutionService(
+            StreamingRuntimeComposition composition
+    ) {
+        return composition.service();
+    }
+
+    @Bean
+    public ApplicationRunner startupRecoveryScanner(StreamingRuntimeComposition composition) {
+        return arguments -> composition.recoveryScanner().ifPresent(RecoveryScanner::scan);
+    }
+
 }

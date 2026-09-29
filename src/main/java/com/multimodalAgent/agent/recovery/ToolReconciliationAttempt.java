@@ -55,6 +55,10 @@ public record ToolReconciliationAttempt(
                 && (errorCode.isEmpty() || errorMessage.isEmpty() || completedAt.isEmpty())) {
             throw new IllegalArgumentException("FAILED attempt requires error and completion");
         }
+        if (status == ToolReconciliationAttemptStatus.ABANDONED
+                && (errorCode.isEmpty() || errorMessage.isEmpty() || completedAt.isEmpty())) {
+            throw new IllegalArgumentException("ABANDONED attempt requires error and completion");
+        }
         if (status == ToolReconciliationAttemptStatus.SUPERSEDED
                 && completedAt.isEmpty()) {
             throw new IllegalArgumentException("SUPERSEDED attempt requires completion");

@@ -14,4 +14,9 @@ public interface ExecutionHistoryStore {
     void record(AgentEvent event);
 
     void finalizeRun(String runId, AgentRunResult result);
+
+    /** Validates identity/status before an existing-run resume; it must not create durable data. */
+    default void assertExistingRunning(String runId, String runtimeConfigSnapshotId) {
+        throw new UnsupportedOperationException("Existing-run resume is not supported");
+    }
 }
