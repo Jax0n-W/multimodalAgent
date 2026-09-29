@@ -31,7 +31,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(5, result.migrationsExecuted);
+        assertEquals(6, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -43,13 +43,14 @@ class AgentRuntimeMySqlMigrationTest {
                            'agent_steps',
                            'tool_executions',
                            'agent_runtime_config_snapshots',
-                           'agent_recovery_checkpoints'
+                           'agent_recovery_checkpoints',
+                           'tool_reconciliation_attempts'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(5, resultSet.getInt(1));
+                assertEquals(6, resultSet.getInt(1));
             }
         }
 
@@ -74,6 +75,12 @@ class AgentRuntimeMySqlMigrationTest {
                     "id", "checkpoint_id", "run_id", "checkpoint_sequence",
                     "schema_version", "iteration", "boundary", "state_json",
                     "runtime_config_snapshot_id", "created_at"
+            ));
+            assertColumns(connection, "tool_reconciliation_attempts", List.of(
+                    "reconciliation_id", "run_id", "tool_execution_id", "tool_call_id",
+                    "attempt_no", "contract_id", "strategy_id", "status", "outcome",
+                    "external_reference", "evidence_summary", "error_code", "error_message",
+                    "started_at", "completed_at", "created_at"
             ));
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
@@ -116,6 +123,20 @@ class AgentRuntimeMySqlMigrationTest {
                     "runtime_config_snapshot_id",
                     "agent_runtime_config_snapshots",
                     "snapshot_id"
+            );
+            assertUniqueIndex(
+                    connection,
+                    "tool_reconciliation_attempts",
+                    "uk_tool_reconciliation_attempts_sequence",
+                    List.of("tool_execution_id", "attempt_no")
+            );
+            assertForeignKey(
+                    connection,
+                    "tool_reconciliation_attempts",
+                    "fk_tool_reconciliation_attempts_execution",
+                    "tool_execution_id",
+                    "tool_executions",
+                    "execution_id"
             );
         }
     }

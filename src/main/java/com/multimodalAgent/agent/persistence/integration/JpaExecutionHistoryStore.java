@@ -261,7 +261,10 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         step.setCompletedAt(event.occurredAt());
         stepRepository.saveAndFlush(step);
 
-        ToolExecutionEntity execution = requireToolExecution(event.runId(), event.toolCallId());
+        ToolExecutionEntity execution = requireToolExecutionForRecoveryMutation(
+                event.runId(),
+                event.toolCallId()
+        );
         execution.setStatus(ToolExecutionStatus.SUCCEEDED);
         execution.setCompletedAt(event.occurredAt());
         toolExecutionRepository.saveAndFlush(execution);
@@ -280,7 +283,10 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         step.setErrorCode(event.errorCode().name());
         stepRepository.saveAndFlush(step);
 
-        ToolExecutionEntity execution = requireToolExecution(event.runId(), event.toolCallId());
+        ToolExecutionEntity execution = requireToolExecutionForRecoveryMutation(
+                event.runId(),
+                event.toolCallId()
+        );
         execution.setStatus(ToolExecutionStatus.FAILED);
         execution.setCompletedAt(event.occurredAt());
         execution.setErrorCode(event.errorCode().name());
@@ -380,6 +386,17 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
 
     private ToolExecutionEntity requireToolExecution(String runId, String toolCallId) {
         return toolExecutionRepository.findByRunIdAndToolCallId(runId, toolCallId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Durable ToolExecution not found for run/toolCall: "
+                                + runId + "/" + toolCallId
+                ));
+    }
+
+    private ToolExecutionEntity requireToolExecutionForRecoveryMutation(
+            String runId,
+            String toolCallId
+    ) {
+        return toolExecutionRepository.findForRecoveryMutation(runId, toolCallId)
                 .orElseThrow(() -> new IllegalStateException(
                         "Durable ToolExecution not found for run/toolCall: "
                                 + runId + "/" + toolCallId

@@ -30,5 +30,17 @@ public interface ToolExecutionRepository extends JpaRepository<ToolExecutionEnti
             @Param("toolCallId") String toolCallId
     );
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select execution
+            from ToolExecutionEntity execution
+            where execution.runId = :runId
+              and execution.toolCallId = :toolCallId
+            """)
+    Optional<ToolExecutionEntity> findForRecoveryMutation(
+            @Param("runId") String runId,
+            @Param("toolCallId") String toolCallId
+    );
+
     Optional<ToolExecutionEntity> findByIdempotencyKey(String idempotencyKey);
 }

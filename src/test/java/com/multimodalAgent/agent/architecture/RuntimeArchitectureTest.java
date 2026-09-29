@@ -89,6 +89,15 @@ class RuntimeArchitectureTest {
     }
 
     @Test
+    void recoveryDomainMustNotInvokeOriginalToolRuntime() {
+        noClasses().that().resideInAPackage(RECOVERY_DOMAIN)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "com.multimodalAgent.agent.runtime.tool.."
+                )
+                .check(recoveryClasses);
+    }
+
+    @Test
     void runtimeMustNotDependOnLiveStreamingOrTransportTypes() {
         noClasses().that().resideInAPackage(RUNTIME)
                 .should().dependOnClassesThat().resideInAnyPackage(
