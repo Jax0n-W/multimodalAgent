@@ -8,6 +8,11 @@ import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatib
 import com.multimodalAgent.agent.adapter.model.springai.streaming.SpringWebClientOpenAiCompatibleStreamingClient;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.StreamingModelInvocationScope;
 import com.multimodalAgent.agent.config.multimodalAgentProperties;
+import com.multimodalAgent.agent.context.AgentContextAssembler;
+import com.multimodalAgent.agent.context.AgentContextSnapshotFactory;
+import com.multimodalAgent.agent.context.AgentContextSnapshotStore;
+import com.multimodalAgent.agent.context.ContextAssemblingAgentExecutionCoordinator;
+import com.multimodalAgent.agent.context.RequestMessageContextSource;
 import com.multimodalAgent.agent.coordination.RunLeaseStore;
 import com.multimodalAgent.agent.coordination.integration.CoordinatedAgentExecutionCoordinator;
 import com.multimodalAgent.agent.coordination.integration.ExecutionCoordinationBoundaryMiddleware;
@@ -234,6 +239,7 @@ public class StreamingAgentExecutionConfiguration {
             ResolvedExecutionConfigResolver configResolver,
             ExecutionConfigSnapshotFactory snapshotFactory,
             ExecutionConfigSnapshotStore snapshotStore,
+            AgentContextSnapshotStore contextSnapshotStore,
             RecoveryCheckpointStore recoveryCheckpointStore,
             ToolRecoveryContractBindingMiddleware toolRecoveryContractBindingMiddleware,
             ToolOutcomeRecorder toolOutcomeRecorder,
@@ -309,11 +315,21 @@ public class StreamingAgentExecutionConfiguration {
                         snapshotStore,
                         checkpointing::execute
                 );
+        ContextAssemblingAgentExecutionCoordinator contextAssembling =
+                new ContextAssemblingAgentExecutionCoordinator(
+                        new AgentContextAssembler(
+                                List.of(new RequestMessageContextSource()),
+                                new AgentContextSnapshotFactory(objectMapper),
+                                Clock.systemUTC()
+                        ),
+                        contextSnapshotStore,
+                        snapshotting::execute
+                );
+        StreamingRunExecutionLifecycle streamingLifecycle =
+                new StreamingRunExecutionLifecycle(hub, publisher, controls);
         StreamingAgentExecutionService service = new StreamingAgentExecutionService(
-                snapshotting::execute,
-                hub,
-                publisher,
-                controls
+                contextAssembling::execute,
+                streamingLifecycle
         );
         Optional<RecoveryScanner> scanner = Optional.empty();
         if (leaseStore != null) {
@@ -346,7 +362,10 @@ public class StreamingAgentExecutionConfiguration {
                     new ExecutionConfigSnapshotRestorer(objectMapper),
                     modelConfig,
                     recoveryCheckpointStore,
-                    persistent
+                    new RecoveryStreamingExecutionLifecycle(
+                            streamingLifecycle,
+                            persistent
+                    )
             );
             scanner = Optional.of(new RecoveryScanner(recoveryCandidateStore, engine));
         }

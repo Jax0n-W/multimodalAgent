@@ -1,6 +1,7 @@
 package com.multimodalAgent.agent.recovery.persistence;
 
 import com.multimodalAgent.agent.persistence.entity.ToolExecutionEntity;
+import com.multimodalAgent.agent.persistence.model.ToolExecutionStatus;
 import com.multimodalAgent.agent.persistence.repository.ToolExecutionRepository;
 import com.multimodalAgent.agent.recovery.ToolReconciliationSupport;
 import com.multimodalAgent.agent.recovery.ToolRecoveryContractBindingException;
@@ -44,6 +45,13 @@ public class JpaToolRecoveryContractBindingStore
             throw new ToolRecoveryContractConflictException(runId, toolCallId);
         }
         if (bindingAbsent(execution)) {
+            if (execution.getStatus() != ToolExecutionStatus.PLANNED) {
+                throw new ToolRecoveryContractBindingException(
+                        "Tool recovery contract can only be first-bound while PLANNED: "
+                                + runId + "/" + toolCallId + " is "
+                                + execution.getStatus()
+                );
+            }
             execution.bindRecoveryContract(contract);
             repository.saveAndFlush(execution);
             return;

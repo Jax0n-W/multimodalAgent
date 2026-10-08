@@ -20,6 +20,7 @@ import com.multimodalAgent.agent.recovery.ToolRecoveryAssessmentReason;
 import com.multimodalAgent.agent.recovery.ToolRecoveryCapabilityEvaluator;
 import com.multimodalAgent.agent.recovery.ToolRecoveryClass;
 import com.multimodalAgent.agent.recovery.ToolRecoveryContract;
+import com.multimodalAgent.agent.recovery.ToolRecoveryContractBindingException;
 import com.multimodalAgent.agent.recovery.ToolRecoveryContractConflictException;
 import com.multimodalAgent.agent.recovery.ToolRecoveryContractSnapshot;
 import com.multimodalAgent.agent.recovery.ToolReplaySemantics;
@@ -33,9 +34,11 @@ import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -79,6 +82,9 @@ class ToolRecoveryContractBindingPersistenceTest {
     private ToolExecutionRepository toolRepository;
 
     @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
     private JpaToolRecoveryContractBindingStore bindingStore;
 
     @Autowired
@@ -118,12 +124,12 @@ class ToolRecoveryContractBindingPersistenceTest {
                 STEP_ID,
                 TOOL_CALL_ID,
                 TOOL_NAME,
-                ToolExecutionStatus.STARTED
+                ToolExecutionStatus.PLANNED
         ));
     }
 
     @Test
-    void sameBindingIsIdempotentAndDifferentBindingConflicts() {
+    void plannedFirstBindingIsAllowedAndRepeatedBindingIsIdempotent() {
         ToolRecoveryContractSnapshot original = contract(
                 "v1",
                 ToolReplaySemantics.IDEMPOTENT
@@ -136,6 +142,16 @@ class ToolRecoveryContractBindingPersistenceTest {
         ToolExecutionEntity restored = tool();
         assertEquals(original.contractId(), restored.getRecoveryContractId());
         assertEquals(versionAfterFirstBinding, restored.getVersion());
+    }
+
+    @Test
+    void existingDifferentBindingAlwaysConflictsWithoutMutation() {
+        ToolRecoveryContractSnapshot original = contract(
+                "v1", ToolReplaySemantics.IDEMPOTENT
+        );
+        bindingStore.bind(RUN_ID, TOOL_CALL_ID, original);
+        setStatus(ToolExecutionStatus.UNKNOWN);
+
         assertThrows(ToolRecoveryContractConflictException.class, () ->
                 bindingStore.bind(
                         RUN_ID,
@@ -147,12 +163,85 @@ class ToolRecoveryContractBindingPersistenceTest {
     }
 
     @Test
+    void unboundExecutionCanOnlyBeFirstBoundWhilePlanned() {
+        for (ToolExecutionStatus status : List.of(
+                ToolExecutionStatus.STARTED,
+                ToolExecutionStatus.UNKNOWN,
+                ToolExecutionStatus.SUCCEEDED,
+                ToolExecutionStatus.FAILED,
+                ToolExecutionStatus.BLOCKED,
+                ToolExecutionStatus.CANCELLED
+        )) {
+            setStatus(status);
+
+            assertThrows(ToolRecoveryContractBindingException.class, () ->
+                    bindingStore.bind(
+                            RUN_ID,
+                            TOOL_CALL_ID,
+                            contract("v1", ToolReplaySemantics.IDEMPOTENT)
+                    )
+            );
+
+            assertFalse(tool().hasAnyRecoveryContractField());
+        }
+    }
+
+    @Test
+    void identicalBindingRemainsIdempotentAfterExecutionBoundary() {
+        ToolRecoveryContractSnapshot original = contract(
+                "v1", ToolReplaySemantics.IDEMPOTENT
+        );
+        bindingStore.bind(RUN_ID, TOOL_CALL_ID, original);
+        for (ToolExecutionStatus status : List.of(
+                ToolExecutionStatus.STARTED,
+                ToolExecutionStatus.UNKNOWN,
+                ToolExecutionStatus.SUCCEEDED,
+                ToolExecutionStatus.FAILED,
+                ToolExecutionStatus.BLOCKED,
+                ToolExecutionStatus.CANCELLED
+        )) {
+            setStatus(status);
+            long version = tool().getVersion();
+
+            bindingStore.bind(RUN_ID, TOOL_CALL_ID, original);
+
+            assertEquals(version, tool().getVersion());
+            assertEquals(original.contractId(), tool().getRecoveryContractId());
+        }
+    }
+
+    @Test
+    void partialHistoricalBindingFailsClosedAndIsNotCompleted() {
+        jdbc.update("""
+                UPDATE tool_executions
+                SET recovery_contract_id = ?
+                WHERE run_id = ? AND tool_call_id = ?
+                """, "partial-contract", RUN_ID, TOOL_CALL_ID);
+
+        assertThrows(ToolRecoveryContractConflictException.class, () ->
+                bindingStore.bind(
+                        RUN_ID,
+                        TOOL_CALL_ID,
+                        contract("v1", ToolReplaySemantics.IDEMPOTENT)
+                )
+        );
+
+        ToolExecutionEntity execution = tool();
+        assertEquals("partial-contract", execution.getRecoveryContractId());
+        assertEquals(null, execution.getRecoveryContractSchemaVersion());
+        assertEquals(null, execution.getRecoveryContractVersion());
+        assertEquals(null, execution.getReplaySemantics());
+        assertEquals(null, execution.getReconciliationSupported());
+    }
+
+    @Test
     void historicalContractSurvivesCurrentDescriptorDrift() {
         ToolRecoveryContractSnapshot historical = contract(
                 "v1",
                 ToolReplaySemantics.IDEMPOTENT
         );
         bindingStore.bind(RUN_ID, TOOL_CALL_ID, historical);
+        setStatus(ToolExecutionStatus.STARTED);
 
         ToolDescriptor<String> currentDescriptor = new ToolDescriptor<>(
                 TOOL_NAME,
@@ -210,6 +299,12 @@ class ToolRecoveryContractBindingPersistenceTest {
 
     private ToolExecutionEntity tool() {
         return toolRepository.findByRunIdAndToolCallId(RUN_ID, TOOL_CALL_ID).orElseThrow();
+    }
+
+    private void setStatus(ToolExecutionStatus status) {
+        ToolExecutionEntity execution = tool();
+        execution.setStatus(status);
+        toolRepository.saveAndFlush(execution);
     }
 
     private RecoveryToolEvidence onlyTool(RecoveryEvidence evidence) {

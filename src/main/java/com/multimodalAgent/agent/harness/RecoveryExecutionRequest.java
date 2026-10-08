@@ -37,4 +37,16 @@ public record RecoveryExecutionRequest(
                 cancellationContext, contributors
         );
     }
+
+    public RecoveryExecutionRequest withCancellationContext(
+            CancellationContext context
+    ) {
+        return new RecoveryExecutionRequest(
+                runSpec,
+                resumeState,
+                runtimeConfigSnapshotId,
+                Objects.requireNonNull(context, "context must not be null"),
+                runtimeContextContributors
+        );
+    }
 }

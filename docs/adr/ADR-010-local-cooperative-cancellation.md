@@ -12,6 +12,8 @@ P8.4 已实现；分布式取消和 Provider 主动中止仍待后续阶段。
 
 生产执行使用一个节点本地活动控制表，以 `runId` 定位本 JVM 正在执行的控制对象。P6 持久化准入成功后、`RUN_STARTED` 前注册；外层执行无论返回还是抛出都清理。该对象同时注入 `AgentRuntimeContext.cancellationContext`，Runtime Core 不查询控制表、Spring、数据库或流式设施。`ExecutionControlState` 仅表示 `RUNNING` / `CANCEL_REQUESTED` 意图；活动表条目的 `ACTIVE` / `CORE_TERMINAL` / `CLOSED` 生命周期与之分开。控制表不保存历史 tombstone，也不承担 Run 身份、归属或状态的持久化真相。
 
+P10H 对恢复执行段复用同一个活动控制生命周期：只有在 P7 所有权成立且 P6 已验证既有 `RUNNING` Run 后才注册真实控制对象，并把它作为恢复 Runtime 的 `CancellationContext`。恢复正常返回、模型或持久化失败、租约丢失以及初始化失败都清理该条目；恢复不创建第二套控制表，也不把取消意图持久化为新的真相。
+
 取消请求与普通完成的终态决定在同一条目锁上序列化。普通完成先封口，之后的请求得到 `ALREADY_TERMINAL`；取消先被接受，普通完成不能再产生 `RUN_COMPLETED`，而在安全边界转为 `CANCELLED`。真正已开始的操作失败仍按其失败事实处理。`ACCEPTED` 只有一次；同时或重复请求得到 `ALREADY_REQUESTED`。条目已关闭或当前节点没有活动执行时不保留本地终态：服务重新读取持久状态，已终结的 Run 返回 `ALREADY_TERMINAL`，仍在运行但不在本节点及 `WAITING_APPROVAL` 返回 `NOT_ACTIVE`。P8.4 不把等待审批的未来恢复预先取消。
 
 显式控制入口为 `POST /api/agent/runs/{runId}/cancel`。先用已认证用户与 `agent_runs.user_id` 核验归属；未知 Run 与非归属用户统一返回 404。`ACCEPTED`、`ALREADY_REQUESTED`、`ALREADY_TERMINAL` 返回 200 和结果 DTO；`NOT_ACTIVE` 返回 409。知道 `runId` 不构成授权。SSE 断开仅取消订阅，不调用此入口，也不改变执行控制。

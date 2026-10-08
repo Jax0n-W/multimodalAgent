@@ -22,6 +22,7 @@ class RuntimeArchitectureTest {
     private static final String COORDINATION_WATCHDOG =
             "com.multimodalAgent.agent.coordination.watchdog..";
     private static final String RECOVERY_DOMAIN = "com.multimodalAgent.agent.recovery";
+    private static final String CONTEXT_DOMAIN = "com.multimodalAgent.agent.context..";
     private final JavaClasses runtimeClasses = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("com.multimodalAgent.agent.runtime");
@@ -34,6 +35,9 @@ class RuntimeArchitectureTest {
     private final JavaClasses recoveryClasses = new ClassFileImporter()
             .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
             .importPackages("com.multimodalAgent.agent.recovery");
+    private final JavaClasses contextClasses = new ClassFileImporter()
+            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+            .importPackages("com.multimodalAgent.agent.context");
 
     @Test
     void runtimeMustNotDependOnApplicationOrInfrastructurePackages() {
@@ -95,6 +99,22 @@ class RuntimeArchitectureTest {
                         "com.multimodalAgent.agent.runtime.tool.."
                 )
                 .check(recoveryClasses);
+    }
+
+    @Test
+    void contextAssemblyContractMustRemainFrameworkAndInfrastructureNeutral() {
+        noClasses().that().resideInAPackage(CONTEXT_DOMAIN)
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "org.springframework..",
+                        "jakarta.persistence..",
+                        "org.hibernate..",
+                        "org.flywaydb..",
+                        "com.multimodalAgent.agent.persistence..",
+                        "org.springframework.data.redis..",
+                        "io.lettuce..",
+                        "redis.clients.jedis.."
+                )
+                .check(contextClasses);
     }
 
     @Test

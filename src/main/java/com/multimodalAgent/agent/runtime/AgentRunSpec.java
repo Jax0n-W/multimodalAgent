@@ -63,4 +63,16 @@ public record AgentRunSpec(
         allowedTools = Set.copyOf(allowedTools);
         approvedToolCallIds = Set.copyOf(approvedToolCallIds);
     }
+
+    public AgentRunSpec withMessages(List<AgentMessage> assembledMessages) {
+        return new AgentRunSpec(
+                runId,
+                sessionId,
+                assembledMessages,
+                maxIterations,
+                allowedTools,
+                approvedToolCallIds,
+                budget
+        );
+    }
 }

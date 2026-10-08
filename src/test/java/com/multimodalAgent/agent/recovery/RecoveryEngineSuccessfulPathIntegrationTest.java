@@ -1,6 +1,9 @@
 package com.multimodalAgent.agent.recovery;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingAgentModelAdapter;
+import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingOptions;
+import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiStreamEvent;
 import com.multimodalAgent.agent.coordination.RunLease;
 import com.multimodalAgent.agent.coordination.RunLeaseAcquireResult;
 import com.multimodalAgent.agent.coordination.RunLeaseReleaseResult;
@@ -8,6 +11,7 @@ import com.multimodalAgent.agent.coordination.RunLeaseRenewResult;
 import com.multimodalAgent.agent.coordination.RunLeaseStore;
 import com.multimodalAgent.agent.coordination.integration.ExecutionCoordinationBoundaryMiddleware;
 import com.multimodalAgent.agent.coordination.watchdog.RunLeaseWatchdog;
+import com.multimodalAgent.agent.adapter.model.springai.streaming.StreamingModelInvocationScope;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshot;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotFactory;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotRestorer;
@@ -26,6 +30,7 @@ import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
 import com.multimodalAgent.agent.runtime.event.AgentEvent;
 import com.multimodalAgent.agent.runtime.event.AgentEventType;
+import com.multimodalAgent.agent.runtime.event.RunStoppedEvent;
 import com.multimodalAgent.agent.runtime.extension.RuntimeMiddlewareChain;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.ModelTurn;
@@ -38,8 +43,18 @@ import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
 import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
+import com.multimodalAgent.agent.streaming.ExecutionStreamHub;
+import com.multimodalAgent.agent.streaming.ExecutionStreamPublisher;
+import com.multimodalAgent.agent.streaming.ExecutionStreamSubscription;
+import com.multimodalAgent.agent.streaming.bridge.AgentEventStreamBridge;
+import com.multimodalAgent.agent.streaming.integration.LocalExecutionControlRegistry;
+import com.multimodalAgent.agent.streaming.integration.RecoveryStreamingExecutionLifecycle;
+import com.multimodalAgent.agent.streaming.integration.StreamingRunExecutionLifecycle;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.openai.api.OpenAiApi;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -52,10 +67,23 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import com.multimodalAgent.agent.runtime.control.CancelRequestResult;
+import com.multimodalAgent.agent.stream.ControlEvent;
+import com.multimodalAgent.agent.stream.ExecutionStreamEvent;
+import com.multimodalAgent.agent.stream.ModelDelta;
+import com.multimodalAgent.agent.stream.RuntimeEventPayload;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RecoveryEngineSuccessfulPathIntegrationTest {
@@ -104,6 +132,17 @@ class RecoveryEngineSuccessfulPathIntegrationTest {
         );
         ExecutionPersistenceComposition persistenceComposition =
                 new ExecutionPersistenceComposition(history);
+        ExecutionStreamHub hub = new ExecutionStreamHub();
+        ExecutionStreamPublisher streamPublisher = new ExecutionStreamPublisher(hub);
+        LocalExecutionControlRegistry controls =
+                new LocalExecutionControlRegistry(streamPublisher);
+        AgentEventStreamBridge streamBridge = new AgentEventStreamBridge(streamPublisher);
+        StreamingRunExecutionLifecycle streamingLifecycle =
+                new StreamingRunExecutionLifecycle(
+                        hub,
+                        streamPublisher,
+                        controls
+                );
         ScriptedAgentModel model = new ScriptedAgentModel(
                 ModelTurn.finalAnswer("recovered completion")
         );
@@ -120,9 +159,15 @@ class RecoveryEngineSuccessfulPathIntegrationTest {
                 model,
                 toolExecutor,
                 TestModelToolDefinitionProjector.INSTANCE,
-                persistenceComposition.eventPublisher()
+                event -> {
+                    persistenceComposition.eventPublisher().publish(event);
+                    streamBridge.publish(event);
+                }
         );
+        StreamingModelInvocationScope invocationScope =
+                new StreamingModelInvocationScope();
         RuntimeMiddlewareChain middleware = new RuntimeMiddlewareChain(List.of(
+                invocationScope,
                 new ExecutionCoordinationBoundaryMiddleware(),
                 new RecoveryCheckpointRuntimeMiddleware(
                         persistenceComposition::assertHealthy
@@ -157,7 +202,10 @@ class RecoveryEngineSuccessfulPathIntegrationTest {
                 new ExecutionConfigSnapshotRestorer(objectMapper),
                 modelConfig,
                 checkpoints,
-                persistence
+                new RecoveryStreamingExecutionLifecycle(
+                        streamingLifecycle,
+                        persistence
+                )
         );
 
         RecoveryEngineResult result = engine.recover(
@@ -196,6 +244,282 @@ class RecoveryEngineSuccessfulPathIntegrationTest {
         ));
         assertEquals(0, snapshots.persistCalls);
         assertSame(originalSnapshot, snapshots.snapshot);
+        assertEquals(0, controls.activeCount());
+        assertFalse(hub.isOpen(RUN_ID));
+    }
+
+    @Test
+    void recoveredRunningSegmentStreamsAndCancelsWithoutSecondAdmissionOrRunStart()
+            throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        ResolvedModelConfig modelConfig = new ResolvedModelConfig(
+                new ModelIdentity("test", "recovery-model"),
+                BigDecimal.ZERO,
+                128,
+                new ModelTimeoutPolicy(Duration.ofSeconds(20), Duration.ofSeconds(20))
+        );
+        ResolvedExecutionConfig resolvedConfig = new ResolvedExecutionConfig(
+                ResolvedExecutionConfig.CURRENT_SCHEMA_VERSION,
+                modelConfig,
+                new ResolvedExecutionConfig.RuntimeConfig(3, List.of()),
+                ExecutionBudget.unlimited()
+        );
+        ExecutionConfigSnapshot snapshot =
+                new ExecutionConfigSnapshotFactory(objectMapper).create(resolvedConfig);
+        RecordingSnapshotStore snapshots = new RecordingSnapshotStore(snapshot);
+        InMemoryCheckpointStore checkpoints = new InMemoryCheckpointStore();
+        RecoveryCheckpoint checkpoint = iterationCheckpoint(snapshot.snapshotId());
+        checkpoints.persist(checkpoint);
+        RecoveryEvidenceReader evidenceReader = runId -> new RecoveryEvidence(
+                RUN_ID,
+                Optional.of(new RecoveryRunEvidence(
+                        RUN_ID,
+                        RecoveryRunStatus.RUNNING,
+                        0,
+                        Optional.of(snapshot.snapshotId())
+                )),
+                Optional.of(checkpoints.findLatestByRunId(runId).orElseThrow()),
+                List.of(),
+                List.of(),
+                List.of()
+        );
+        RecordingHistoryStore history = new RecordingHistoryStore(
+                RUN_ID, snapshot.snapshotId()
+        );
+        ExecutionPersistenceComposition persistenceComposition =
+                new ExecutionPersistenceComposition(history);
+        ExecutionStreamHub hub = new ExecutionStreamHub();
+        ExecutionStreamPublisher streamPublisher = new ExecutionStreamPublisher(hub);
+        LocalExecutionControlRegistry controls =
+                new LocalExecutionControlRegistry(streamPublisher);
+        StreamingRunExecutionLifecycle streamingLifecycle =
+                new StreamingRunExecutionLifecycle(hub, streamPublisher, controls);
+        AgentEventStreamBridge streamBridge = new AgentEventStreamBridge(streamPublisher);
+        StreamingModelInvocationScope invocationScope =
+                new StreamingModelInvocationScope();
+        CountDownLatch providerEntered = new CountDownLatch(1);
+        CountDownLatch releaseProvider = new CountDownLatch(1);
+        AtomicInteger modelCalls = new AtomicInteger();
+        OpenAiCompatibleStreamingAgentModelAdapter model =
+                new OpenAiCompatibleStreamingAgentModelAdapter(
+                        request -> Flux.defer(() -> {
+                            modelCalls.incrementAndGet();
+                            providerEntered.countDown();
+                            await(releaseProvider);
+                            return Flux.just(
+                                    textChunk(
+                                            "recovered answer",
+                                            OpenAiApi.ChatCompletionFinishReason.STOP
+                                    ),
+                                    OpenAiStreamEvent.Done.INSTANCE
+                            );
+                        }),
+                        new OpenAiCompatibleStreamingOptions(
+                                "test", "recovery-model", 0.0, 128
+                        ),
+                        objectMapper,
+                        invocationScope
+                );
+        AgentRunner runner = new AgentRunner(
+                model,
+                new ToolExecutor(
+                        new ToolRegistry(List.of()),
+                        new ToolArgumentResolver(
+                                objectMapper,
+                                Validation.buildDefaultValidatorFactory().getValidator()
+                        ),
+                        new DefaultToolPolicyEngine(),
+                        objectMapper
+                ),
+                TestModelToolDefinitionProjector.INSTANCE,
+                event -> {
+                    persistenceComposition.eventPublisher().publish(event);
+                    streamBridge.publish(event);
+                }
+        );
+        PersistentAgentExecutionCoordinator persistence =
+                persistenceComposition.persistentCoordinator(
+                        new AgentExecutionCoordinator(
+                                runner,
+                                new RuntimeMiddlewareChain(List.of(
+                                        invocationScope,
+                                        new ExecutionCoordinationBoundaryMiddleware(),
+                                        new RecoveryCheckpointRuntimeMiddleware(
+                                                persistenceComposition::assertHealthy
+                                        ),
+                                        persistenceComposition.boundaryMiddleware()
+                                ))
+                        )
+                );
+        RecordingLeaseStore leases = new RecordingLeaseStore();
+        RecoveryEngine engine = new RecoveryEngine(
+                leases,
+                session -> new RunLeaseWatchdog(
+                        leases,
+                        session,
+                        (task, interval) -> () -> {
+                        },
+                        Duration.ofHours(1)
+                ),
+                evidenceReader,
+                new RecoveryEligibilityEvaluator(),
+                authority -> {
+                    throw new AssertionError("safe recovery must not create a repairer");
+                },
+                new BudgetRecoveryReconstructor(),
+                snapshots,
+                new ExecutionConfigSnapshotRestorer(objectMapper),
+                modelConfig,
+                checkpoints,
+                new RecoveryStreamingExecutionLifecycle(
+                        streamingLifecycle,
+                        persistence
+                )
+        );
+
+        CompletableFuture<RecoveryEngineResult> recovering =
+                CompletableFuture.supplyAsync(() -> engine.recover(
+                        new RecoveryCandidate(RUN_ID, SESSION_ID)
+                ));
+        ExecutionStreamSubscription subscription = null;
+        Disposable receiver = null;
+        try {
+            assertTrue(providerEntered.await(10, TimeUnit.SECONDS));
+            assertTrue(hub.isOpen(RUN_ID));
+            assertEquals(1, controls.activeCount());
+            subscription = hub.subscribe(RUN_ID);
+            BlockingQueue<ExecutionStreamEvent> events = new LinkedBlockingQueue<>();
+            receiver = subscription.events().subscribe(events::offer);
+
+            assertEquals(CancelRequestResult.ACCEPTED, controls.requestCancel(RUN_ID));
+            assertEquals(CancelRequestResult.ALREADY_REQUESTED,
+                    controls.requestCancel(RUN_ID));
+            releaseProvider.countDown();
+
+            RecoveryEngineResult recovered = recovering.get(20, TimeUnit.SECONDS);
+            assertEquals(RecoveryEngineResult.Status.RESUMED, recovered.status());
+            assertEquals(AgentStopReason.CANCELLED,
+                    recovered.runResult().orElseThrow().stopReason());
+            List<ExecutionStreamEvent> observed = takeUntilRunStopped(events);
+            assertEquals(1, observed.stream()
+                    .filter(event -> event.payload() instanceof ControlEvent)
+                    .count());
+            assertTrue(observed.stream().anyMatch(event ->
+                    event.payload() instanceof ModelDelta delta
+                            && delta.content().equals("recovered answer")
+            ));
+            assertTrue(observed.stream().anyMatch(event ->
+                    event.payload() instanceof RuntimeEventPayload payload
+                            && payload.event().type() == AgentEventType.MODEL_COMPLETED
+            ));
+            assertTrue(observed.stream().anyMatch(event ->
+                    event.payload() instanceof RuntimeEventPayload payload
+                            && payload.event() instanceof RunStoppedEvent stopped
+                            && stopped.stopReason() == AgentStopReason.CANCELLED
+            ));
+            assertFalse(observed.stream().anyMatch(event ->
+                    event.payload() instanceof RuntimeEventPayload payload
+                            && payload.event().type() == AgentEventType.RUN_STARTED
+            ));
+            for (int index = 1; index < observed.size(); index++) {
+                assertTrue(observed.get(index).streamSequence()
+                        > observed.get(index - 1).streamSequence());
+            }
+        } finally {
+            releaseProvider.countDown();
+            if (receiver != null) {
+                receiver.dispose();
+            }
+            if (subscription != null) {
+                subscription.close();
+            }
+        }
+
+        assertEquals(1, leases.acquisitions);
+        assertEquals(1, leases.releases);
+        assertEquals(0, history.admissions);
+        assertEquals(1, history.existingRunAssertions);
+        assertEquals(1, history.finalizations);
+        assertEquals(AgentStopReason.CANCELLED, history.finalResult.stopReason());
+        assertFalse(history.events.stream().anyMatch(
+                event -> event.type() == AgentEventType.RUN_STARTED
+        ));
+        assertEquals(1, modelCalls.get());
+        assertEquals(0, controls.activeCount());
+        assertFalse(hub.isOpen(RUN_ID));
+        assertEquals(0, snapshots.persistCalls);
+    }
+
+    private RecoveryCheckpoint iterationCheckpoint(String snapshotId) {
+        return new RecoveryCheckpoint(
+                "checkpoint-iteration-boundary",
+                RUN_ID,
+                1,
+                0,
+                RecoveryCheckpointBoundary.ITERATION_BOUNDARY,
+                List.of(AgentMessage.user("resume and answer")),
+                List.of(),
+                Set.of(),
+                new BudgetCheckpoint(0, 0, 0, 0, 0, Optional.empty(), false),
+                Set.of(),
+                snapshotId,
+                NOW,
+                RecoveryCheckpoint.CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    private List<ExecutionStreamEvent> takeUntilRunStopped(
+            BlockingQueue<ExecutionStreamEvent> events
+    ) throws InterruptedException {
+        List<ExecutionStreamEvent> observed = new ArrayList<>();
+        for (int index = 0; index < 10; index++) {
+            ExecutionStreamEvent event = events.poll(5, TimeUnit.SECONDS);
+            assertNotNull(event);
+            observed.add(event);
+            if (event.payload() instanceof RuntimeEventPayload payload
+                    && payload.event() instanceof RunStoppedEvent) {
+                return observed;
+            }
+        }
+        throw new AssertionError("RUN_STOPPED was not observed");
+    }
+
+    private OpenAiStreamEvent textChunk(
+            String content,
+            OpenAiApi.ChatCompletionFinishReason finishReason
+    ) {
+        OpenAiApi.ChatCompletionMessage message = new OpenAiApi.ChatCompletionMessage(
+                content,
+                OpenAiApi.ChatCompletionMessage.Role.ASSISTANT
+        );
+        OpenAiApi.ChatCompletionChunk.ChunkChoice choice =
+                new OpenAiApi.ChatCompletionChunk.ChunkChoice(
+                        finishReason,
+                        0,
+                        message,
+                        null
+                );
+        return new OpenAiStreamEvent.Chunk(new OpenAiApi.ChatCompletionChunk(
+                "recovery-response",
+                List.of(choice),
+                1L,
+                "recovery-model",
+                null,
+                null,
+                "chat.completion.chunk",
+                null
+        ));
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("Provider was not released");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(exception);
+        }
     }
 
     private RecoveryToolRepairer repairer(

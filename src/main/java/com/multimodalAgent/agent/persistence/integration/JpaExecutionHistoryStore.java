@@ -100,6 +100,7 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         );
         run.setCurrentIteration(0);
         run.setRuntimeConfigSnapshotId(request.runtimeConfigSnapshotId());
+        run.setContextSnapshotId(request.contextSnapshotId());
         runRepository.saveAndFlush(run);
     }
 

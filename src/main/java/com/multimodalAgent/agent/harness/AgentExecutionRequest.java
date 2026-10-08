@@ -16,6 +16,7 @@ public record AgentExecutionRequest(
         String requestId,
         Long userId,
         String runtimeConfigSnapshotId,
+        String contextSnapshotId,
         CancellationContext cancellationContext,
         List<AgentRuntimeContextContributor> runtimeContextContributors
 ) {
@@ -24,6 +25,7 @@ public record AgentExecutionRequest(
         Objects.requireNonNull(runSpec, "runSpec must not be null");
         requireOptionalText(requestId, "requestId");
         requireOptionalText(runtimeConfigSnapshotId, "runtimeConfigSnapshotId");
+        requireOptionalText(contextSnapshotId, "contextSnapshotId");
         Objects.requireNonNull(cancellationContext, "cancellationContext must not be null");
         Objects.requireNonNull(
                 runtimeContextContributors,
@@ -50,6 +52,45 @@ public record AgentExecutionRequest(
                 requestId,
                 userId,
                 runtimeConfigSnapshotId,
+                null,
+                cancellationContext,
+                List.of()
+        );
+    }
+
+    public AgentExecutionRequest(
+            AgentRunSpec runSpec,
+            String requestId,
+            Long userId,
+            String runtimeConfigSnapshotId,
+            CancellationContext cancellationContext,
+            List<AgentRuntimeContextContributor> runtimeContextContributors
+    ) {
+        this(
+                runSpec,
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                null,
+                cancellationContext,
+                runtimeContextContributors
+        );
+    }
+
+    public AgentExecutionRequest(
+            AgentRunSpec runSpec,
+            String requestId,
+            Long userId,
+            String runtimeConfigSnapshotId,
+            String contextSnapshotId,
+            CancellationContext cancellationContext
+    ) {
+        this(
+                runSpec,
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                contextSnapshotId,
                 cancellationContext,
                 List.of()
         );
@@ -71,6 +112,7 @@ public record AgentExecutionRequest(
                 requestId,
                 userId,
                 runtimeConfigSnapshotId,
+                contextSnapshotId,
                 cancellationContext,
                 contributors
         );
@@ -82,6 +124,7 @@ public record AgentExecutionRequest(
                 requestId,
                 userId,
                 runtimeConfigSnapshotId,
+                contextSnapshotId,
                 Objects.requireNonNull(context, "context must not be null"),
                 runtimeContextContributors
         );
@@ -96,6 +139,34 @@ public record AgentExecutionRequest(
                 requestId,
                 userId,
                 snapshotId,
+                contextSnapshotId,
+                cancellationContext,
+                runtimeContextContributors
+        );
+    }
+
+    public AgentExecutionRequest withContextSnapshotId(String snapshotId) {
+        if (snapshotId == null || snapshotId.isBlank()) {
+            throw new IllegalArgumentException("snapshotId must not be blank");
+        }
+        return new AgentExecutionRequest(
+                runSpec,
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                snapshotId,
+                cancellationContext,
+                runtimeContextContributors
+        );
+    }
+
+    public AgentExecutionRequest withRunSpec(AgentRunSpec replacement) {
+        return new AgentExecutionRequest(
+                Objects.requireNonNull(replacement, "replacement must not be null"),
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                contextSnapshotId,
                 cancellationContext,
                 runtimeContextContributors
         );

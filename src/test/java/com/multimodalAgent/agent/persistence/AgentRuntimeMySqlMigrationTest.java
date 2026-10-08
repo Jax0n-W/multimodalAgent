@@ -31,7 +31,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(8, result.migrationsExecuted);
+        assertEquals(9, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -45,19 +45,21 @@ class AgentRuntimeMySqlMigrationTest {
                            'agent_runtime_config_snapshots',
                            'agent_recovery_checkpoints',
                            'tool_reconciliation_attempts',
-                           'tool_execution_outcomes'
+                           'tool_execution_outcomes',
+                           'agent_context_snapshots'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(7, resultSet.getInt(1));
+                assertEquals(8, resultSet.getInt(1));
             }
         }
 
         try (Connection connection = MYSQL.createConnection("")) {
             assertColumns(connection, "agent_runs", List.of(
-                    "user_id", "current_iteration", "version", "runtime_config_snapshot_id"
+                    "user_id", "current_iteration", "version", "runtime_config_snapshot_id",
+                    "context_snapshot_id"
             ));
             assertColumns(connection, "agent_steps", List.of("step_index"));
             assertColumns(connection, "tool_executions", List.of(
@@ -87,6 +89,10 @@ class AgentRuntimeMySqlMigrationTest {
             assertColumns(connection, "tool_execution_outcomes", List.of(
                     "execution_id", "run_id", "tool_call_id", "tool_name",
                     "result_payload", "payload_hash", "recorded_at", "schema_version"
+            ));
+            assertColumns(connection, "agent_context_snapshots", List.of(
+                    "snapshot_id", "schema_version", "run_id", "session_id", "user_id",
+                    "context_hash", "context_json", "created_at"
             ));
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
@@ -157,6 +163,14 @@ class AgentRuntimeMySqlMigrationTest {
                     "execution_id",
                     "tool_executions",
                     "execution_id"
+            );
+            assertForeignKey(
+                    connection,
+                    "agent_runs",
+                    "fk_agent_runs_context_snapshot",
+                    "context_snapshot_id",
+                    "agent_context_snapshots",
+                    "snapshot_id"
             );
         }
     }

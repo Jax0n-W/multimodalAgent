@@ -24,6 +24,8 @@ The original P9.3 snapshot referenced by `AgentRun` is authoritative. Recovery v
 
 A startup `RecoveryScanner` queries durable `RUNNING` runs only and submits each to the complete acquire/re-read/evaluate protocol. It introduces no second distributed lock. Fresh execution retains its existing Snapshotting, P7 coordination, checkpointing, persistence, and `AgentRunner.run` semantics.
 
+Each actual recovery execution segment enters the same node-local control and streaming shell as fresh execution, but only after P7 acquisition and P6 validation of the existing Run. The shell installs the real cancellation context, opens the one segment-local `ExecutionStreamHub` state, and registers the Model Delta observer. Runtime facts, deltas, and control observations therefore share one live sequence for that segment. All initialized resources are identity-safely removed on every exit path. This lifecycle does not perform admission, does not create another Run, and does not emit another `RUN_STARTED`.
+
 ## Consequences
 
 - Resume continues the same durable run and normally finalizes that existing record.

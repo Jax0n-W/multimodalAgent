@@ -48,7 +48,36 @@ public class RecoveryEngine {
     private final ExecutionConfigSnapshotRestorer snapshotRestorer;
     private final ResolvedModelConfig currentModelConfig;
     private final RecoveryCheckpointStore checkpointStore;
-    private final PersistentAgentExecutionCoordinator persistence;
+    private final RecoveryExecutionLifecycle executionLifecycle;
+
+    public RecoveryEngine(
+            RunLeaseStore leaseStore,
+            RunLeaseWatchdogFactory watchdogFactory,
+            RecoveryEvidenceReader evidenceReader,
+            RecoveryEligibilityEvaluator evaluator,
+            RecoveryToolRepairerFactory repairerFactory,
+            BudgetRecoveryReconstructor budgetReconstructor,
+            ExecutionConfigSnapshotStore snapshotStore,
+            ExecutionConfigSnapshotRestorer snapshotRestorer,
+            ResolvedModelConfig currentModelConfig,
+            RecoveryCheckpointStore checkpointStore,
+            RecoveryExecutionLifecycle executionLifecycle
+    ) {
+        this.leaseStore = Objects.requireNonNull(leaseStore, "leaseStore must not be null");
+        this.watchdogFactory = Objects.requireNonNull(watchdogFactory, "watchdogFactory must not be null");
+        this.evidenceReader = Objects.requireNonNull(evidenceReader, "evidenceReader must not be null");
+        this.evaluator = Objects.requireNonNull(evaluator, "evaluator must not be null");
+        this.repairerFactory = Objects.requireNonNull(repairerFactory, "repairerFactory must not be null");
+        this.budgetReconstructor = Objects.requireNonNull(budgetReconstructor, "budgetReconstructor must not be null");
+        this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore must not be null");
+        this.snapshotRestorer = Objects.requireNonNull(snapshotRestorer, "snapshotRestorer must not be null");
+        this.currentModelConfig = Objects.requireNonNull(currentModelConfig, "currentModelConfig must not be null");
+        this.checkpointStore = Objects.requireNonNull(checkpointStore, "checkpointStore must not be null");
+        this.executionLifecycle = Objects.requireNonNull(
+                executionLifecycle,
+                "executionLifecycle must not be null"
+        );
+    }
 
     public RecoveryEngine(
             RunLeaseStore leaseStore,
@@ -63,17 +92,20 @@ public class RecoveryEngine {
             RecoveryCheckpointStore checkpointStore,
             PersistentAgentExecutionCoordinator persistence
     ) {
-        this.leaseStore = Objects.requireNonNull(leaseStore, "leaseStore must not be null");
-        this.watchdogFactory = Objects.requireNonNull(watchdogFactory, "watchdogFactory must not be null");
-        this.evidenceReader = Objects.requireNonNull(evidenceReader, "evidenceReader must not be null");
-        this.evaluator = Objects.requireNonNull(evaluator, "evaluator must not be null");
-        this.repairerFactory = Objects.requireNonNull(repairerFactory, "repairerFactory must not be null");
-        this.budgetReconstructor = Objects.requireNonNull(budgetReconstructor, "budgetReconstructor must not be null");
-        this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore must not be null");
-        this.snapshotRestorer = Objects.requireNonNull(snapshotRestorer, "snapshotRestorer must not be null");
-        this.currentModelConfig = Objects.requireNonNull(currentModelConfig, "currentModelConfig must not be null");
-        this.checkpointStore = Objects.requireNonNull(checkpointStore, "checkpointStore must not be null");
-        this.persistence = Objects.requireNonNull(persistence, "persistence must not be null");
+        this(
+                leaseStore,
+                watchdogFactory,
+                evidenceReader,
+                evaluator,
+                repairerFactory,
+                budgetReconstructor,
+                snapshotStore,
+                snapshotRestorer,
+                currentModelConfig,
+                checkpointStore,
+                Objects.requireNonNull(persistence, "persistence must not be null")
+                        ::resumeExisting
+        );
     }
 
     public RecoveryEngineResult recover(RecoveryCandidate candidate) {
@@ -206,7 +238,7 @@ public class RecoveryEngine {
                         Optional.of(config.model().identity()), checkpointStore
                 )
         );
-        AgentRunResult result = persistence.resumeExisting(request);
+        AgentRunResult result = executionLifecycle.resume(request);
         authority.assertAuthority(candidate.runId());
         return new RecoveryEngineResult(
                 RecoveryEngineResult.Status.RESUMED, Optional.of(result)

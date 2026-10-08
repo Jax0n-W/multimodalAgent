@@ -16,9 +16,11 @@ P8.3 已接受。
 
 订阅仅支持实时事件：只观察订阅之后发布的内容。P8.3 不根据 `Last-Event-ID` 重放，不查询 MySQL 历史，也不持久化 `streamSequence`。显式的外层执行生命周期在执行前打开 Run Stream，在完整外层执行返回或抛出后关闭；仅有 Runtime 终态事件并不负责流的清理。
 
-对于 P8.3，已关闭的持久化 `runId` 不会重新打开为第二代实时流。`streamSequence` 在该持久 Run 执行对应的唯一实时流生命周期中保持唯一。生产组合仅在 Runtime Context Contributor 中打开 Hub；该 Contributor 在 P6 唯一持久化准入之后、`RUN_STARTED` 之前运行。重复 `runId` 因而会在 Hub 打开前被准入拒绝。临时 Hub 本身不保留已关闭 ID；持久化 Run 唯一约束提供实际可执行的保护，无需无限增长的内存 Tombstone Set。P7 租约获取、P6 准入及其调用方可见的失败优先级继续由既有 Coordinator 处理。
+一个活动执行片段恰好对应一个节点本地实时流和一个 `streamSequence` 分配权威；顺序保证只在该流生命周期内成立。Fresh execution 的生产组合仅在 Runtime Context Contributor 中打开 Hub；该 Contributor 在 P6 唯一持久化准入之后、`RUN_STARTED` 之前运行，重复 `runId` 因而会在 Hub 打开前被准入拒绝。进程崩溃后，合法的 P10 恢复 owner 可以为同一 durable `runId` 建立新的本地流片段；其序号不承诺与崩溃前连续，旧 SSE ID 也不能用于推断或重放历史。临时 Hub 本身不保留已关闭 ID；P6 durable truth 与 P7 单一活动 owner 提供实际保护，无需无限增长的内存 Tombstone Set。
 
 独立的、需显式启用的生产入口 `/api/agent/runs` 将 P8.2 流式模型、P8.3 Bridge、P6 持久化及可选 P7 协调组合起来。完整外层执行返回或抛出后才关闭 Hub。现有 `/api/chat` 保持旧链路。客户端必须提供唯一 `runId`，并在执行请求进行期间并发连接 SSE；因为只支持实时观测，执行开始后才连接可能错过早期事件，包括 `RUN_STARTED`。
+
+P10H 将相同的实时流生命周期用于恢复执行段。恢复在取得 P7 所有权并通过既有 P6 Run 校验后打开该 `runId` 的节点本地流，注册 Model Delta observer，并让 Runtime、Model Delta 与 Control 观测共享一个 `streamSequence` 权威；执行段返回或抛出后统一清理。恢复流仍不重放崩溃前事件、不持久化序号，也不产生第二个 `RUN_STARTED`。
 
 SSE 路由 `/api/agent/runs/{runId}/stream` 沿用应用 `/api/**` 的身份认证边界，同时要求持久化 Run 归属授权。归属来自 `agent_runs.user_id`，不保存在节点本地 Hub 中。普通客户端请求不存在的 `runId` 或不属于自己的 `runId` 时，均收到 `404 NOT_FOUND`，不能据此区分 Run 是否存在。归属校验必须先于 `hub.subscribe(runId)`；通过校验后到实际订阅之间若 Run 已关闭，同样返回 404，不尝试跨数据库与 Hub 建立原子事务。
 
