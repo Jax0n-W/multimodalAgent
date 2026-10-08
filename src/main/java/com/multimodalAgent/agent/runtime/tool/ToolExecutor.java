@@ -181,6 +181,8 @@ public final class ToolExecutor {
             throw exception;
         } catch (BudgetBlockedException exception) {
             throw exception;
+        } catch (ToolOutcomeSerializationException exception) {
+            throw exception;
         } catch (ToolOutcomeRecordingException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -352,8 +354,11 @@ public final class ToolExecutor {
         }
         try {
             return objectMapper.writeValueAsString(output);
-        } catch (JsonProcessingException exception) {
-            throw new IllegalStateException("Tool output could not be serialized", exception);
+        } catch (JsonProcessingException | RuntimeException exception) {
+            throw new ToolOutcomeSerializationException(
+                    "Tool output could not be serialized after execution",
+                    exception
+            );
         }
     }
 }

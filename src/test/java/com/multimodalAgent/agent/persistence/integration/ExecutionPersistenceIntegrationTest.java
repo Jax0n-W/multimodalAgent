@@ -1,6 +1,10 @@
 package com.multimodalAgent.agent.persistence.integration;
 
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.multimodalAgent.agent.harness.AgentExecutionCoordinator;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
@@ -36,6 +40,7 @@ import com.multimodalAgent.agent.runtime.tool.ToolArgumentResolver;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
 import com.multimodalAgent.agent.runtime.tool.ToolErrorCode;
 import com.multimodalAgent.agent.runtime.tool.ToolExecutor;
+import com.multimodalAgent.agent.runtime.tool.ToolOutcomeSerializationException;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
 import com.multimodalAgent.agent.runtime.tool.ToolRisk;
 import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
@@ -49,6 +54,7 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -57,8 +63,10 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @DataJpaTest(properties = {
@@ -222,6 +230,45 @@ class ExecutionPersistenceIntegrationTest {
         assertEquals(AgentStepStatus.FAILED, steps.get(1).getStatus());
         assertEquals(ToolExecutionStatus.FAILED, execution.getStatus());
         assertEquals("EXECUTION_FAILED", execution.getErrorCode());
+    }
+
+    @Test
+    void postExecutionSerializationFailureLeavesDurableToolAttemptStarted() {
+        SerializationFailingTool tool = new SerializationFailingTool();
+        Harness harness = harness(
+                new ScriptedAgentModel(ModelTurn.toolCall(
+                        call("call-serialization", tool.name())
+                )),
+                List.of(tool),
+                new DefaultToolPolicyEngine(),
+                failingOutputMapper()
+        );
+
+        assertThrows(ToolOutcomeSerializationException.class, () -> execute(
+                harness,
+                "serialization-failure",
+                3,
+                Set.of(tool.name()),
+                Set.of()
+        ));
+
+        AgentRunEntity run = run("serialization-failure");
+        AgentStepEntity toolStep = steps("serialization-failure").get(1);
+        ToolExecutionEntity execution = executions("serialization-failure").get(0);
+        assertEquals(1, tool.executions());
+        assertEquals(AgentRunStatus.RUNNING, run.getStatus());
+        assertNull(run.getStopReason());
+        assertNull(run.getCompletedAt());
+        assertEquals(AgentStepStatus.RUNNING, toolStep.getStatus());
+        assertEquals(ToolExecutionStatus.STARTED, execution.getStatus());
+        assertNull(execution.getErrorCode());
+        assertNull(execution.getCompletedAt());
+        assertTrue(harness.events().events().stream()
+                .anyMatch(event -> event.type() == AgentEventType.TOOL_STARTED));
+        assertFalse(harness.events().events().stream()
+                .anyMatch(event -> event.type() == AgentEventType.TOOL_SUCCEEDED));
+        assertFalse(harness.events().events().stream()
+                .anyMatch(event -> event.type() == AgentEventType.TOOL_FAILED));
     }
 
     @Test
@@ -404,6 +451,15 @@ class ExecutionPersistenceIntegrationTest {
             List<? extends AgentTool<?, ?>> tools,
             ToolPolicyEngine policyEngine
     ) {
+        return harness(model, tools, policyEngine, new ObjectMapper());
+    }
+
+    private Harness harness(
+            AgentModel model,
+            List<? extends AgentTool<?, ?>> tools,
+            ToolPolicyEngine policyEngine,
+            ObjectMapper objectMapper
+    ) {
         ExecutionPersistenceComposition composition =
                 new ExecutionPersistenceComposition(store);
         RecordingAgentEventPublisher recordingPublisher = new RecordingAgentEventPublisher();
@@ -411,7 +467,6 @@ class ExecutionPersistenceIntegrationTest {
             recordingPublisher.publish(event);
             composition.eventPublisher().publish(event);
         };
-        ObjectMapper objectMapper = new ObjectMapper();
         ToolExecutor executor = new ToolExecutor(
                 new ToolRegistry(tools),
                 new ToolArgumentResolver(
@@ -435,6 +490,21 @@ class ExecutionPersistenceIntegrationTest {
                 composition.persistentCoordinator(coordinator),
                 recordingPublisher
         );
+    }
+
+    private ObjectMapper failingOutputMapper() {
+        SimpleModule module = new SimpleModule();
+        module.addSerializer(UnserializableOutput.class, new JsonSerializer<>() {
+            @Override
+            public void serialize(
+                    UnserializableOutput value,
+                    JsonGenerator generator,
+                    SerializerProvider serializers
+            ) throws IOException {
+                throw new IOException("forced output serialization failure");
+            }
+        });
+        return new ObjectMapper().registerModule(module);
     }
 
     private AgentRunResult execute(
@@ -515,6 +585,43 @@ class ExecutionPersistenceIntegrationTest {
     }
 
     private record ToolInput(@NotBlank String query) {
+    }
+
+    private record UnserializableOutput(String value) {
+    }
+
+    private static final class SerializationFailingTool
+            implements AgentTool<ToolInput, UnserializableOutput> {
+
+        private int executions;
+
+        @Override
+        public ToolDescriptor<ToolInput> descriptor() {
+            return new ToolDescriptor<>(
+                    name(),
+                    "Post-execution serialization fixture",
+                    ToolInput.class,
+                    ToolRisk.LOW,
+                    true,
+                    true,
+                    false
+            );
+        }
+
+        @Override
+        public UnserializableOutput execute(ToolInput input) {
+            executions++;
+            return new UnserializableOutput("completed");
+        }
+
+        @Override
+        public String name() {
+            return "serialization_tool";
+        }
+
+        private int executions() {
+            return executions;
+        }
     }
 
     private static final class CountingTool implements AgentTool<ToolInput, String> {
