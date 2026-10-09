@@ -25,8 +25,10 @@ public record AgentContextSnapshot(
 
     public AgentContextSnapshot {
         requireText(snapshotId, "snapshotId");
-        if (schemaVersion < 1) {
-            throw new IllegalArgumentException("schemaVersion must be at least 1");
+        if (schemaVersion != CURRENT_SCHEMA_VERSION) {
+            throw new IllegalArgumentException(
+                    "Unsupported context snapshot schemaVersion: " + schemaVersion
+            );
         }
         requireText(runId, "runId");
         requireText(sessionId, "sessionId");
@@ -39,7 +41,7 @@ public record AgentContextSnapshot(
                 value,
                 "orderedContributions must not contain null"
         ));
-        messages = List.copyOf(Objects.requireNonNull(messages, "messages must not be null"));
+        messages = ContextSemanticContent.freezeMessages(messages);
         if (messages.isEmpty()) {
             throw new IllegalArgumentException("messages must not be empty");
         }

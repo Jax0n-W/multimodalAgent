@@ -1,5 +1,7 @@
 package com.multimodalAgent.agent.persistence.integration;
 
+import com.multimodalAgent.agent.context.AgentContextSnapshot;
+import com.multimodalAgent.agent.context.AgentContextSnapshotStore;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
 import com.multimodalAgent.agent.persistence.entity.AgentStepEntity;
@@ -70,11 +72,13 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
     private final AgentRunRepository runRepository;
     private final AgentStepRepository stepRepository;
     private final ToolExecutionRepository toolExecutionRepository;
+    private final AgentContextSnapshotStore contextSnapshotStore;
 
     public JpaExecutionHistoryStore(
             AgentRunRepository runRepository,
             AgentStepRepository stepRepository,
-            ToolExecutionRepository toolExecutionRepository
+            ToolExecutionRepository toolExecutionRepository,
+            AgentContextSnapshotStore contextSnapshotStore
     ) {
         this.runRepository = Objects.requireNonNull(runRepository, "runRepository must not be null");
         this.stepRepository = Objects.requireNonNull(
@@ -85,11 +89,17 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
                 toolExecutionRepository,
                 "toolExecutionRepository must not be null"
         );
+        this.contextSnapshotStore = Objects.requireNonNull(
+                contextSnapshotStore,
+                "contextSnapshotStore must not be null"
+        );
     }
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void admit(AgentExecutionRequest request) {
+        Objects.requireNonNull(request, "request must not be null");
+        validateContextSnapshotIdentity(request);
         AgentRunEntity run = new AgentRunEntity(
                 request.runSpec().runId(),
                 request.requestId(),
@@ -102,6 +112,24 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         run.setRuntimeConfigSnapshotId(request.runtimeConfigSnapshotId());
         run.setContextSnapshotId(request.contextSnapshotId());
         runRepository.saveAndFlush(run);
+    }
+
+    private void validateContextSnapshotIdentity(AgentExecutionRequest request) {
+        String snapshotId = request.contextSnapshotId();
+        if (snapshotId == null) {
+            return;
+        }
+        AgentContextSnapshot snapshot = contextSnapshotStore.findById(snapshotId)
+                .orElseThrow(() -> new ExecutionPersistenceException(
+                        "Context snapshot does not exist for AgentRun admission"
+                ));
+        if (!request.runSpec().runId().equals(snapshot.runId())
+                || !request.runSpec().sessionId().equals(snapshot.sessionId())
+                || !request.userId().equals(snapshot.userId())) {
+            throw new ExecutionPersistenceException(
+                    "Context snapshot identity does not match AgentRun admission"
+            );
+        }
     }
 
     @Override

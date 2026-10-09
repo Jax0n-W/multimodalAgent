@@ -10,7 +10,9 @@ import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
 import com.multimodalAgent.agent.persistence.integration.ExecutionPersistenceComposition;
 import com.multimodalAgent.agent.persistence.integration.JpaExecutionConfigSnapshotStore;
+import com.multimodalAgent.agent.persistence.integration.JpaAgentContextSnapshotStore;
 import com.multimodalAgent.agent.persistence.integration.JpaExecutionHistoryStore;
+import com.multimodalAgent.agent.persistence.repository.AgentContextSnapshotRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentStepRepository;
 import com.multimodalAgent.agent.persistence.repository.ToolExecutionRepository;
@@ -67,6 +69,9 @@ class DurableRuntimeEvalObservationTest {
     private ToolExecutionRepository toolExecutionRepository;
 
     @Autowired
+    private AgentContextSnapshotRepository contextSnapshotRepository;
+
+    @Autowired
     private JpaExecutionConfigSnapshotStore snapshotStore;
 
     @Test
@@ -74,7 +79,10 @@ class DurableRuntimeEvalObservationTest {
         ObjectMapper objectMapper = new ObjectMapper();
         RecordingAgentEventPublisher events = new RecordingAgentEventPublisher();
         JpaExecutionHistoryStore historyStore = new JpaExecutionHistoryStore(
-                runRepository, stepRepository, toolExecutionRepository
+                runRepository,
+                stepRepository,
+                toolExecutionRepository,
+                new JpaAgentContextSnapshotStore(contextSnapshotRepository, objectMapper)
         );
         ExecutionPersistenceComposition persistence =
                 new ExecutionPersistenceComposition(historyStore);

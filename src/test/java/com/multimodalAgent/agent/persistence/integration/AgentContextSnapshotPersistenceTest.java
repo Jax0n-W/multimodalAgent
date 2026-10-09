@@ -12,15 +12,17 @@ import com.multimodalAgent.agent.persistence.entity.AgentContextSnapshotEntity;
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
 import com.multimodalAgent.agent.persistence.repository.AgentContextSnapshotRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
-import com.multimodalAgent.agent.persistence.repository.AgentStepRepository;
-import com.multimodalAgent.agent.persistence.repository.ToolExecutionRepository;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -28,6 +30,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -41,6 +44,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
         "spring.flyway.enabled=true"
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Import({JpaAgentContextSnapshotStore.class, JpaExecutionHistoryStore.class})
+@ImportAutoConfiguration(JacksonAutoConfiguration.class)
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AgentContextSnapshotPersistenceTest {
 
     @Autowired
@@ -50,25 +56,13 @@ class AgentContextSnapshotPersistenceTest {
     private AgentRunRepository runRepository;
 
     @Autowired
-    private AgentStepRepository stepRepository;
+    private ObjectMapper objectMapper;
 
     @Autowired
-    private ToolExecutionRepository toolExecutionRepository;
-
-    private ObjectMapper objectMapper;
     private JpaAgentContextSnapshotStore snapshotStore;
-    private JpaExecutionHistoryStore historyStore;
 
-    @BeforeEach
-    void setUp() {
-        objectMapper = new ObjectMapper();
-        snapshotStore = new JpaAgentContextSnapshotStore(snapshotRepository, objectMapper);
-        historyStore = new JpaExecutionHistoryStore(
-                runRepository,
-                stepRepository,
-                toolExecutionRepository
-        );
-    }
+    @Autowired
+    private JpaExecutionHistoryStore historyStore;
 
     @Test
     void persistsAndIdempotentlyReusesSameSemanticSnapshotAcrossCreationTimes() {
@@ -137,6 +131,91 @@ class AgentContextSnapshotPersistenceTest {
         assertNotEquals(linkedRun.getRunId(), historicalRun.getRunId());
     }
 
+    @Test
+    void rejectsContextSnapshotOwnedByAnotherRunBeforeAdmission() {
+        AgentContextSnapshot context = snapshot(
+                "owner-run", Instant.parse("2026-09-30T03:04:00Z")
+        );
+        snapshotStore.persistIfAbsent(context);
+        AgentExecutionRequest wrongRun = request(
+                "p11-context-run-other",
+                context.sessionId(),
+                context.userId(),
+                "wrong-run"
+        ).withContextSnapshotId(context.snapshotId());
+
+        assertThrows(ExecutionPersistenceException.class, () -> historyStore.admit(wrongRun));
+        assertFalse(runRepository.findByRunId(wrongRun.runSpec().runId()).isPresent());
+    }
+
+    @Test
+    void rejectsContextSnapshotOwnedByAnotherSessionBeforeAdmission() {
+        AgentContextSnapshot context = snapshot(
+                "owner-session", Instant.parse("2026-09-30T03:05:00Z")
+        );
+        snapshotStore.persistIfAbsent(context);
+        AgentExecutionRequest wrongSession = request(
+                context.runId(),
+                "p11-context-session-other",
+                context.userId(),
+                "wrong-session"
+        ).withContextSnapshotId(context.snapshotId());
+
+        assertThrows(
+                ExecutionPersistenceException.class,
+                () -> historyStore.admit(wrongSession)
+        );
+        assertFalse(runRepository.findByRunId(wrongSession.runSpec().runId()).isPresent());
+    }
+
+    @Test
+    void rejectsContextSnapshotOwnedByAnotherUserBeforeAdmission() {
+        AgentContextSnapshot context = snapshot(
+                "owner-user", Instant.parse("2026-09-30T03:06:00Z")
+        );
+        snapshotStore.persistIfAbsent(context);
+        AgentExecutionRequest wrongUser = request(
+                context.runId(),
+                context.sessionId(),
+                context.userId() + 1,
+                "wrong-user"
+        ).withContextSnapshotId(context.snapshotId());
+
+        assertThrows(ExecutionPersistenceException.class, () -> historyStore.admit(wrongUser));
+        assertFalse(runRepository.findByRunId(wrongUser.runSpec().runId()).isPresent());
+    }
+
+    @Test
+    void rejectsMissingContextSnapshotBeforeAdmission() {
+        AgentExecutionRequest request = request("missing-context")
+                .withContextSnapshotId("context-v1-" + "0".repeat(64));
+
+        assertThrows(ExecutionPersistenceException.class, () -> historyStore.admit(request));
+        assertFalse(runRepository.findByRunId(request.runSpec().runId()).isPresent());
+    }
+
+    @Test
+    void admissionDoesNotBypassStoredCanonicalContentVerification() {
+        AgentContextSnapshot context = snapshot(
+                "corrupt-admission", Instant.parse("2026-09-30T03:07:00Z")
+        );
+        snapshotRepository.saveAndFlush(new AgentContextSnapshotEntity(
+                context.snapshotId(),
+                context.schemaVersion(),
+                context.runId(),
+                context.sessionId(),
+                context.userId(),
+                context.contextHash(),
+                "{}",
+                context.createdAt()
+        ));
+        AgentExecutionRequest request = request("corrupt-admission")
+                .withContextSnapshotId(context.snapshotId());
+
+        assertThrows(ContextAssemblyException.class, () -> historyStore.admit(request));
+        assertFalse(runRepository.findByRunId(request.runSpec().runId()).isPresent());
+    }
+
     private AgentContextSnapshot snapshot(String suffix, Instant createdAt) {
         AgentExecutionRequest request = request(suffix);
         return new AgentContextAssembler(
@@ -152,15 +231,29 @@ class AgentContextSnapshotPersistenceTest {
     }
 
     private AgentExecutionRequest request(String suffix) {
+        return request(
+                "p11-context-run-" + suffix,
+                "p11-context-session-" + suffix,
+                11001L,
+                suffix
+        );
+    }
+
+    private AgentExecutionRequest request(
+            String runId,
+            String sessionId,
+            Long userId,
+            String suffix
+    ) {
         return new AgentExecutionRequest(
                 new AgentRunSpec(
-                        "p11-context-run-" + suffix,
-                        "p11-context-session-" + suffix,
+                        runId,
+                        sessionId,
                         List.of(AgentMessage.user("message-" + suffix)),
                         3
                 ),
                 "p11-context-request-" + suffix,
-                11001L
+                userId
         );
     }
 }

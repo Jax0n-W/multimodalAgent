@@ -64,6 +64,22 @@ Recovery does not enter the context assembly coordinator. `RecoveryCheckpoint.me
 continuation authority, and P10 never rebuilds historic context from current sources. The context
 snapshot records initial-context provenance; it does not replace a recovery checkpoint.
 
+### P11.1H integrity hardening
+
+An `AgentContextSnapshot` must retain an immutable, identity-bound representation of the exact
+initial model-visible context used by its owning `AgentRun`. The snapshot boundary therefore takes
+a deep defensive copy of JSON-shaped tool arguments and exposes no mutable nested maps or lists.
+Snapshot creation and restoration verify that ordered provenance continuously and exactly covers
+the final messages, that each recorded segment hash matches, and that source identities and order
+remain valid. Only the supported V1 schema is accepted.
+
+When a non-null context snapshot identity reaches P6 admission, the persisted snapshot is restored
+through its canonical/hash verification path before its run, session, and user identities are
+matched to the requested `AgentRun`. A missing or mismatched snapshot fails before an `agent_runs`
+row is written. Historical null context linkage remains supported. Deep immutable semantic content,
+verified run/session/user binding, provenance consistency, and supported-schema validation together
+form the Context Snapshot Integrity Contract.
+
 ## Consequences
 
 - All future model-visible initial context must integrate through the same deterministic assembler.

@@ -17,11 +17,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Canonical serializer and verifier for content-addressed semantic context snapshots. */
 public final class AgentContextSnapshotFactory {
@@ -41,13 +43,21 @@ public final class AgentContextSnapshotFactory {
     ) {
         Objects.requireNonNull(input, "input must not be null");
         Objects.requireNonNull(createdAt, "createdAt must not be null");
+        List<AgentMessage> frozenMessages = ContextSemanticContent.freezeMessages(messages);
+        List<ContextProvenance> frozenContributions = List.copyOf(
+                Objects.requireNonNull(
+                        orderedContributions,
+                        "orderedContributions must not be null"
+                )
+        );
+        validateProvenance(frozenContributions, frozenMessages);
         String canonicalJson = canonicalJson(
                 AgentContextSnapshot.CURRENT_SCHEMA_VERSION,
                 input.runId(),
                 input.sessionId(),
                 input.userId(),
-                orderedContributions,
-                messages
+                frozenContributions,
+                frozenMessages
         );
         String hash = sha256(canonicalJson);
         return new AgentContextSnapshot(
@@ -56,8 +66,8 @@ public final class AgentContextSnapshotFactory {
                 input.runId(),
                 input.sessionId(),
                 input.userId(),
-                orderedContributions,
-                messages,
+                frozenContributions,
+                frozenMessages,
                 createdAt,
                 hash,
                 canonicalJson
@@ -75,6 +85,11 @@ public final class AgentContextSnapshotFactory {
         try {
             JsonNode root = objectMapper.readTree(canonicalJson);
             int schemaVersion = required(root, "schemaVersion").intValue();
+            if (schemaVersion != AgentContextSnapshot.CURRENT_SCHEMA_VERSION) {
+                throw new ContextAssemblyException(
+                        "Unsupported context snapshot schemaVersion: " + schemaVersion
+                );
+            }
             String runId = required(root, "runId").textValue();
             String sessionId = required(root, "sessionId").textValue();
             long userId = required(root, "userId").longValue();
@@ -82,6 +97,7 @@ public final class AgentContextSnapshotFactory {
                     required(root, "contributions")
             );
             List<AgentMessage> messages = readMessages(required(root, "messages"));
+            validateProvenance(contributions, messages);
             String expectedCanonical = canonicalJson(
                     schemaVersion,
                     runId,
@@ -125,7 +141,67 @@ public final class AgentContextSnapshotFactory {
 
     public String contentHash(List<AgentMessage> messages) {
         Objects.requireNonNull(messages, "messages must not be null");
-        return sha256(write(messagesNode(messages)));
+        return sha256(write(messagesNode(ContextSemanticContent.freezeMessages(messages))));
+    }
+
+    private void validateProvenance(
+            List<ContextProvenance> contributions,
+            List<AgentMessage> messages
+    ) {
+        Objects.requireNonNull(contributions, "orderedContributions must not be null");
+        Objects.requireNonNull(messages, "messages must not be null");
+        Comparator<ContextProvenance> ordering = Comparator
+                .comparingInt(ContextProvenance::order)
+                .thenComparing(ContextProvenance::sourceId)
+                .thenComparing(ContextProvenance::sourceVersion);
+        Set<String> identities = new HashSet<>();
+        int offset = 0;
+        ContextProvenance previous = null;
+        for (ContextProvenance contribution : contributions) {
+            ContextProvenance value = Objects.requireNonNull(
+                    contribution,
+                    "orderedContributions must not contain null"
+            );
+            String identity = value.sourceId() + "\u0000" + value.sourceVersion();
+            if (!identities.add(identity)) {
+                throw new ContextAssemblyException(
+                        "Duplicate context provenance source identity: "
+                                + value.sourceId() + "@" + value.sourceVersion()
+                );
+            }
+            if (previous != null && ordering.compare(previous, value) > 0) {
+                throw new ContextAssemblyException(
+                        "Context provenance is not in deterministic source order"
+                );
+            }
+            int end;
+            try {
+                end = Math.addExact(offset, value.messageCount());
+            } catch (ArithmeticException exception) {
+                throw new ContextAssemblyException(
+                        "Context provenance message range overflows",
+                        exception
+                );
+            }
+            if (end > messages.size()) {
+                throw new ContextAssemblyException(
+                        "Context provenance message range exceeds snapshot messages"
+                );
+            }
+            String actualHash = contentHash(messages.subList(offset, end));
+            if (!actualHash.equals(value.contentHash())) {
+                throw new ContextAssemblyException(
+                        "Context provenance content hash does not match its message segment"
+                );
+            }
+            offset = end;
+            previous = value;
+        }
+        if (offset != messages.size()) {
+            throw new ContextAssemblyException(
+                    "Context provenance message counts do not cover snapshot messages"
+            );
+        }
     }
 
     private String canonicalJson(

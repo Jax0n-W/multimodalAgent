@@ -9,6 +9,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +17,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentContextAssemblerTest {
 
@@ -117,6 +119,8 @@ class AgentContextAssemblerTest {
         arguments.put("nested", Map.of("items", List.of(1, 2, 3), "enabled", true));
         List<AgentMessage> messages = List.of(
                 AgentMessage.system("system"),
+                AgentMessage.user("user"),
+                AgentMessage.assistant("assistant"),
                 AgentMessage.assistantToolCalls(List.of(
                         new ToolCall("call-7", "knowledge_search", arguments)
                 )),
@@ -137,6 +141,134 @@ class AgentContextAssemblerTest {
 
         assertEquals(snapshot, restored);
         assertEquals(messages, restored.messages());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deeplyFreezesNestedToolArgumentsWithoutChangingSnapshotIdentity() {
+        Map<String, Object> nested = new HashMap<>();
+        nested.put("level", 1);
+        Map<String, Object> listItem = new HashMap<>();
+        listItem.put("enabled", true);
+        List<Object> mutableList = new ArrayList<>();
+        mutableList.add(listItem);
+        Map<String, Object> arguments = new LinkedHashMap<>();
+        arguments.put("options", nested);
+        arguments.put("items", mutableList);
+        AgentContextSnapshot snapshot = assembler(List.of(source(
+                "source",
+                "1",
+                0,
+                List.of(AgentMessage.assistantToolCalls(List.of(
+                        new ToolCall("call-immutable", "example_tool", arguments)
+                )))
+        ))).assemble(input(List.of(AgentMessage.user("unused"))));
+        String canonicalJson = snapshot.canonicalJson();
+        String contextHash = snapshot.contextHash();
+        String snapshotId = snapshot.snapshotId();
+
+        nested.put("level", 2);
+        listItem.put("enabled", false);
+        mutableList.add("late mutation");
+
+        Map<String, Object> frozenArguments = snapshot.messages().get(0)
+                .toolCalls().get(0).arguments();
+        Map<String, Object> frozenNested = (Map<String, Object>) frozenArguments.get("options");
+        List<Object> frozenList = (List<Object>) frozenArguments.get("items");
+        Map<String, Object> frozenListItem = (Map<String, Object>) frozenList.get(0);
+        assertEquals(1, frozenNested.get("level"));
+        assertEquals(true, frozenListItem.get("enabled"));
+        assertEquals(1, frozenList.size());
+        assertEquals(canonicalJson, snapshot.canonicalJson());
+        assertEquals(contextHash, snapshot.contextHash());
+        assertEquals(snapshotId, snapshot.snapshotId());
+        assertThrows(UnsupportedOperationException.class,
+                () -> frozenNested.put("level", 3));
+        assertThrows(UnsupportedOperationException.class,
+                () -> frozenList.add("forbidden"));
+        assertThrows(UnsupportedOperationException.class,
+                () -> frozenListItem.put("enabled", false));
+    }
+
+    @Test
+    void rejectsInconsistentProvenanceAndUnsupportedSchema() throws Exception {
+        AgentContextSnapshotFactory factory = new AgentContextSnapshotFactory(
+                new ObjectMapper()
+        );
+        List<AgentMessage> messages = List.of(
+                AgentMessage.user("first"),
+                AgentMessage.assistant("second")
+        );
+        ContextAssemblyInput input = input(messages);
+        String firstHash = factory.contentHash(messages.subList(0, 1));
+        String secondHash = factory.contentHash(messages.subList(1, 2));
+
+        assertThrows(ContextAssemblyException.class, () -> factory.create(
+                input,
+                List.of(new ContextProvenance("source", "1", 0, 1, firstHash)),
+                messages,
+                NOW
+        ));
+        assertThrows(ContextAssemblyException.class, () -> factory.create(
+                input,
+                List.of(new ContextProvenance(
+                        "source", "1", 0, 2, "0".repeat(64)
+                )),
+                messages,
+                NOW
+        ));
+        assertThrows(ContextAssemblyException.class, () -> factory.create(
+                input,
+                List.of(
+                        new ContextProvenance("first", "1", 0, 2, firstHash),
+                        new ContextProvenance(
+                                "second",
+                                "1",
+                                1,
+                                0,
+                                factory.contentHash(List.of())
+                        )
+                ),
+                messages,
+                NOW
+        ));
+        assertThrows(ContextAssemblyException.class, () -> factory.create(
+                input,
+                List.of(
+                        new ContextProvenance("source", "1", 0, 1, firstHash),
+                        new ContextProvenance("source", "1", 1, 1, secondHash)
+                ),
+                messages,
+                NOW
+        ));
+        assertThrows(ContextAssemblyException.class, () -> factory.create(
+                input,
+                List.of(
+                        new ContextProvenance("z-source", "1", 1, 1, firstHash),
+                        new ContextProvenance("a-source", "1", 0, 1, secondHash)
+                ),
+                messages,
+                NOW
+        ));
+
+        AgentContextSnapshot valid = assembler(List.of(
+                source("source", "1", 0, messages)
+        )).assemble(input(List.of(AgentMessage.user("unused"))));
+        ObjectMapper mapper = new ObjectMapper();
+        com.fasterxml.jackson.databind.node.ObjectNode unknownSchema =
+                (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(
+                        valid.canonicalJson()
+                );
+        unknownSchema.put("schemaVersion", 2);
+        ContextAssemblyException failure = assertThrows(
+                ContextAssemblyException.class,
+                () -> factory.restore(
+                        "context-v2-" + "0".repeat(64),
+                        valid.createdAt(),
+                        mapper.writeValueAsString(unknownSchema)
+                )
+        );
+        assertTrue(failure.getMessage().contains("Unsupported"));
     }
 
     @Test

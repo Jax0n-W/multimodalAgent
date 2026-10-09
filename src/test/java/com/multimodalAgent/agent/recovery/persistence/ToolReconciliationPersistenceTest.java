@@ -4,6 +4,7 @@ import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
 import com.multimodalAgent.agent.persistence.entity.AgentStepEntity;
 import com.multimodalAgent.agent.persistence.entity.ToolExecutionEntity;
 import com.multimodalAgent.agent.persistence.integration.JpaExecutionHistoryStore;
+import com.multimodalAgent.agent.persistence.integration.JpaAgentContextSnapshotStore;
 import com.multimodalAgent.agent.persistence.model.AgentRunPhase;
 import com.multimodalAgent.agent.persistence.model.AgentRunStatus;
 import com.multimodalAgent.agent.persistence.model.AgentStepStatus;
@@ -81,6 +82,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
         JpaToolReconciliationAttemptStore.class,
         JpaRecoveryCheckpointStore.class,
         JpaRecoveryEvidenceReader.class,
+        JpaAgentContextSnapshotStore.class,
         JpaExecutionHistoryStore.class
 })
 @ImportAutoConfiguration(JacksonAutoConfiguration.class)

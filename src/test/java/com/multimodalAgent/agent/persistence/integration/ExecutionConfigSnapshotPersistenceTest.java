@@ -11,6 +11,7 @@ import com.multimodalAgent.agent.execution.config.SnapshottingAgentExecutionCoor
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
+import com.multimodalAgent.agent.persistence.repository.AgentContextSnapshotRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentRuntimeConfigSnapshotRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentStepRepository;
 import com.multimodalAgent.agent.persistence.repository.ToolExecutionRepository;
@@ -70,6 +71,9 @@ class ExecutionConfigSnapshotPersistenceTest {
     private ToolExecutionRepository toolExecutionRepository;
 
     @Autowired
+    private AgentContextSnapshotRepository contextSnapshotRepository;
+
+    @Autowired
     private JpaExecutionConfigSnapshotStore transactionalSnapshotStore;
 
     private JpaExecutionConfigSnapshotStore snapshotStore;
@@ -81,7 +85,13 @@ class ExecutionConfigSnapshotPersistenceTest {
     void setUp() {
         snapshotStore = new JpaExecutionConfigSnapshotStore(snapshotRepository);
         historyStore = new JpaExecutionHistoryStore(
-                runRepository, stepRepository, toolExecutionRepository
+                runRepository,
+                stepRepository,
+                toolExecutionRepository,
+                new JpaAgentContextSnapshotStore(
+                        contextSnapshotRepository,
+                        new ObjectMapper()
+                )
         );
         factory = new ExecutionConfigSnapshotFactory(new ObjectMapper());
         resolver = new ResolvedExecutionConfigResolver(new ResolvedModelConfig(

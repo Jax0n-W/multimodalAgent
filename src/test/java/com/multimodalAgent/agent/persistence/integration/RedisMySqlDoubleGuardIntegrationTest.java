@@ -29,6 +29,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
@@ -62,7 +64,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
         "spring.flyway.baseline-version=0"
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import(JpaExecutionHistoryStore.class)
+@Import({JpaExecutionHistoryStore.class, JpaAgentContextSnapshotStore.class})
+@ImportAutoConfiguration(JacksonAutoConfiguration.class)
 @Testcontainers(disabledWithoutDocker = true)
 class RedisMySqlDoubleGuardIntegrationTest {
 
