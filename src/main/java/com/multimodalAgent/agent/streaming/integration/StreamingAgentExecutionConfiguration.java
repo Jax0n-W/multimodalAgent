@@ -17,6 +17,9 @@ import com.multimodalAgent.agent.context.ContextSource;
 import com.multimodalAgent.agent.context.memory.ConversationMemoryPolicy;
 import com.multimodalAgent.agent.context.memory.ConversationMemoryReader;
 import com.multimodalAgent.agent.context.memory.ConversationMemorySource;
+import com.multimodalAgent.agent.context.skill.BuiltInSkills;
+import com.multimodalAgent.agent.context.skill.DeterministicSkillResolver;
+import com.multimodalAgent.agent.context.skill.SkillContextSource;
 import com.multimodalAgent.agent.coordination.RunLeaseStore;
 import com.multimodalAgent.agent.coordination.integration.CoordinatedAgentExecutionCoordinator;
 import com.multimodalAgent.agent.coordination.integration.ExecutionCoordinationBoundaryMiddleware;
@@ -180,6 +183,11 @@ public class StreamingAgentExecutionConfiguration {
             ConversationMemoryReader memoryReader
     ) {
         List<ContextSource> sources = new ArrayList<>();
+        if (properties.getRuntime().getSkills().isEnabled()) {
+            sources.add(new SkillContextSource(
+                    new DeterministicSkillResolver(BuiltInSkills.registry())
+            ));
+        }
         multimodalAgentProperties.Memory memory = properties.getRuntime().getMemory();
         if (memory.isEnabled()) {
             sources.add(new ConversationMemorySource(

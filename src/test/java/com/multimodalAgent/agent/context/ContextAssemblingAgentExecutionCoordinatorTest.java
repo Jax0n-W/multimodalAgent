@@ -45,12 +45,14 @@ class ContextAssemblingAgentExecutionCoordinatorTest {
         AtomicInteger loads = new AtomicInteger();
         AtomicReference<AgentContextSnapshot> persisted = new AtomicReference<>();
         AtomicReference<AgentExecutionRequest> delegated = new AtomicReference<>();
+        AtomicReference<Set<String>> contextAllowedTools = new AtomicReference<>();
         ContextSource source = new ContextSource() {
             @Override public String sourceId() { return "request"; }
             @Override public String sourceVersion() { return "1"; }
             @Override public int order() { return 0; }
             @Override public ContextContribution load(ContextAssemblyInput input) {
                 loads.incrementAndGet();
+                contextAllowedTools.set(input.allowedTools());
                 return new ContextContribution(input.requestMessages());
             }
         };
@@ -84,6 +86,7 @@ class ContextAssemblingAgentExecutionCoordinatorTest {
 
         assertEquals(List.of("context-persisted", "durable-run"), order);
         assertEquals(1, loads.get());
+        assertEquals(Set.of("knowledge_search"), contextAllowedTools.get());
         assertNotNull(persisted.get());
         assertEquals(original.runSpec().messages(), delegated.get().runSpec().messages());
         assertEquals(persisted.get().snapshotId(), delegated.get().contextSnapshotId());

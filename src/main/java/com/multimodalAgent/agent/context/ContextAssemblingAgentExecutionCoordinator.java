@@ -29,7 +29,8 @@ public final class ContextAssemblingAgentExecutionCoordinator {
                 request.runSpec().runId(),
                 request.runSpec().sessionId(),
                 request.userId(),
-                request.runSpec().messages()
+                request.runSpec().messages(),
+                request.runSpec().allowedTools()
         ));
         AgentContextSnapshot stored = store.persistIfAbsent(requested);
         if (!requested.sameSemanticContent(stored)) {

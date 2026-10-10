@@ -127,6 +127,15 @@ class RuntimeArchitectureTest {
     }
 
     @Test
+    void recoveryMustNotResolveSkills() {
+        noClasses().that().resideInAPackage("com.multimodalAgent.agent.recovery..")
+                .should().dependOnClassesThat().resideInAPackage(
+                        "com.multimodalAgent.agent.context.skill.."
+                )
+                .check(recoveryClasses);
+    }
+
+    @Test
     void runtimeMustNotDependOnLiveStreamingOrTransportTypes() {
         noClasses().that().resideInAPackage(RUNTIME)
                 .should().dependOnClassesThat().resideInAnyPackage(

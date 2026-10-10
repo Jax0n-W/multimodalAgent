@@ -3,13 +3,17 @@ package com.multimodalAgent.agent.context;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
 
 import java.util.List;
+import java.util.Collections;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
 
 public record ContextAssemblyInput(
         String runId,
         String sessionId,
         Long userId,
-        List<AgentMessage> requestMessages
+        List<AgentMessage> requestMessages,
+        Set<String> allowedTools
 ) {
 
     public ContextAssemblyInput {
@@ -27,6 +31,22 @@ public record ContextAssemblyInput(
                 message,
                 "requestMessages must not contain null"
         ));
+        Objects.requireNonNull(allowedTools, "allowedTools must not be null");
+        TreeSet<String> sortedTools = new TreeSet<>();
+        for (String tool : allowedTools) {
+            requireText(tool, "allowedTools value");
+            sortedTools.add(tool);
+        }
+        allowedTools = Collections.unmodifiableSet(sortedTools);
+    }
+
+    public ContextAssemblyInput(
+            String runId,
+            String sessionId,
+            Long userId,
+            List<AgentMessage> requestMessages
+    ) {
+        this(runId, sessionId, userId, requestMessages, Set.of());
     }
 
     private static void requireText(String value, String field) {

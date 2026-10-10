@@ -11,6 +11,8 @@ import com.multimodalAgent.agent.context.memory.ConversationMemoryPolicy;
 import com.multimodalAgent.agent.context.memory.ConversationMemoryQuery;
 import com.multimodalAgent.agent.context.memory.ConversationMemorySource;
 import com.multimodalAgent.agent.context.memory.ConversationTurn;
+import com.multimodalAgent.agent.context.skill.SkillContextSource;
+import com.multimodalAgent.agent.context.skill.SkillDefinition;
 import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.persistence.entity.AgentContextSnapshotEntity;
 import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
@@ -41,6 +43,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -262,6 +266,41 @@ class ConversationMemoryPersistenceTest {
         assertEquals(List.of(), reader.read(new ConversationMemoryQuery(
                 USER, SESSION, "current-ambiguous", 6
         )));
+    }
+
+    @Test
+    void historicalSkillSystemMessageIsNotReplayedAsConversationMemory() {
+        String runId = "history-with-skill";
+        SkillDefinition skill = new SkillDefinition(
+                "sleep-guidance", "1", "sleep", "trusted historical instructions",
+                Set.of(), Set.of("sleep"), 10
+        );
+        AgentContextSnapshot context = new AgentContextAssembler(
+                List.of(
+                        new SkillContextSource(input -> Optional.of(skill)),
+                        new RequestMessageContextSource()
+                ),
+                new AgentContextSnapshotFactory(objectMapper),
+                Clock.fixed(BASE, ZoneOffset.UTC)
+        ).assemble(new ContextAssemblyInput(
+                runId,
+                SESSION,
+                USER,
+                List.of(AgentMessage.user("original request")),
+                Set.of()
+        ));
+        snapshotStore.persistIfAbsent(context);
+        saveRun(runId, SESSION, USER, AgentRunStatus.COMPLETED,
+                AgentStopReason.COMPLETED, "final answer", context.snapshotId(), BASE);
+
+        List<ConversationTurn> turns = reader.read(new ConversationMemoryQuery(
+                USER, SESSION, "next-run", 6
+        ));
+
+        assertEquals(1, turns.size());
+        assertEquals("original request", turns.get(0).userContent());
+        assertEquals("final answer", turns.get(0).assistantContent());
+        assertFalse(turns.get(0).userContent().contains("trusted historical instructions"));
     }
 
     private AgentRunEntity completedRun(

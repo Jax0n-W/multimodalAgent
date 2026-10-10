@@ -55,6 +55,7 @@ public class multimodalAgentProperties {
         private boolean enabled;
         private final Budget budget = new Budget();
         private final Memory memory = new Memory();
+        private final Skills skills = new Skills();
 
         public boolean isEnabled() {
             return enabled;
@@ -70,6 +71,22 @@ public class multimodalAgentProperties {
 
         public Memory getMemory() {
             return memory;
+        }
+
+        public Skills getSkills() {
+            return skills;
+        }
+    }
+
+    public static class Skills {
+        private boolean enabled;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 
