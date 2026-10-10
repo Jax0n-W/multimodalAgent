@@ -19,7 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /**
  * 后台工具编排服务。
  *
- * <p>心理报告生成后，按“写 Excel -> 高风险发预警”的顺序执行工具链并持久化状态。</p>
+ * <p>心理报告生成后独立记录 Excel 与高风险预警结果，避免报表故障阻断安全通知。</p>
  */
 public class ToolOrchestrationService {
 
@@ -69,8 +69,8 @@ public class ToolOrchestrationService {
         PsychologicalReport managedReport = reportRepository.findById(reportId)
                 .orElseThrow(() -> new IllegalArgumentException("Report not found: " + reportId));
         writeExcel(managedReport);
-        // 只有 Excel 写入成功且风险等级为 HIGH，才进入预警通知，和文档中的工具链顺序保持一致。
-        if (managedReport.getRiskLevel() == RiskLevel.HIGH && managedReport.getExcelStatus() == ToolStatus.SUCCESS) {
+        // Excel is reporting infrastructure, not proof that a human received a crisis alert.
+        if (managedReport.getRiskLevel() == RiskLevel.HIGH) {
             sendAlerts(managedReport);
         }
         reportRepository.save(managedReport);
@@ -87,6 +87,11 @@ public class ToolOrchestrationService {
     }
 
     private void sendAlerts(PsychologicalReport report) {
+        if (properties.getMcp().getEmail().getRecipients().isEmpty()) {
+            report.setEmailStatus(ToolStatus.FAILED);
+            report.setToolError(appendError(report.getToolError(), "No alert recipient configured"));
+            return;
+        }
         boolean allSuccess = true;
         for (String recipient : properties.getMcp().getEmail().getRecipients()) {
             AlertRecord alertRecord = new AlertRecord();
@@ -112,6 +117,11 @@ public class ToolOrchestrationService {
             allSuccess = allSuccess && sent;
         }
         report.setEmailStatus(allSuccess ? ToolStatus.SUCCESS : ToolStatus.FAILED);
+    }
+
+    private String appendError(String current, String next) {
+        String combined = current == null || current.isBlank() ? next : current + "; " + next;
+        return shorten(combined);
     }
 
     private String shorten(String message) {

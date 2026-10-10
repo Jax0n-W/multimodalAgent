@@ -31,7 +31,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(9, result.migrationsExecuted);
+        assertEquals(10, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -46,13 +46,15 @@ class AgentRuntimeMySqlMigrationTest {
                            'agent_recovery_checkpoints',
                            'tool_reconciliation_attempts',
                            'tool_execution_outcomes',
-                           'agent_context_snapshots'
+                           'agent_context_snapshots',
+                           'chat_runtime_sessions',
+                           'chat_history_projections'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(8, resultSet.getInt(1));
+                assertEquals(10, resultSet.getInt(1));
             }
         }
 
@@ -94,6 +96,13 @@ class AgentRuntimeMySqlMigrationTest {
                     "snapshot_id", "schema_version", "run_id", "session_id", "user_id",
                     "context_hash", "context_json", "created_at"
             ));
+            assertColumns(connection, "chat_runtime_sessions", List.of(
+                    "session_id", "user_id", "created_at"
+            ));
+            assertColumns(connection, "chat_history_projections", List.of(
+                    "run_id", "session_id", "user_id", "status", "chat_message_id",
+                    "error_message", "created_at", "updated_at"
+            ));
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
             assertUniqueIndex(connection, "agent_steps", "uk_agent_steps_run_step_index",
@@ -113,6 +122,14 @@ class AgentRuntimeMySqlMigrationTest {
                     "runtime_config_snapshot_id",
                     "agent_runtime_config_snapshots",
                     "snapshot_id"
+            );
+            assertForeignKey(
+                    connection,
+                    "chat_history_projections",
+                    "fk_chat_history_projection_run",
+                    "run_id",
+                    "agent_runs",
+                    "run_id"
             );
             assertUniqueIndex(
                     connection,

@@ -19,6 +19,7 @@ import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.runtime.model.TokenUsage;
 import com.multimodalAgent.agent.stream.ControlEvent;
 import com.multimodalAgent.agent.stream.ExecutionStreamEvent;
+import com.multimodalAgent.agent.stream.ModelDelta;
 import com.multimodalAgent.agent.streaming.ExecutionStreamHub;
 import com.multimodalAgent.agent.streaming.ExecutionStreamPublisher;
 import com.multimodalAgent.agent.streaming.ExecutionStreamSubscription;
@@ -44,6 +45,29 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class StreamingRunExecutionLifecycleTest {
+
+    @Test
+    void freshObserverIsAttachedBeforeExecutionCanPublish() throws Exception {
+        Fixture fixture = new Fixture();
+        String runId = "chat-observer-ready";
+        BlockingQueue<ExecutionStreamEvent> observed = new LinkedBlockingQueue<>();
+
+        AgentRunResult result = fixture.lifecycle.executeFresh(
+                freshRequest(runId),
+                request -> {
+                    fixture.enter(request);
+                    fixture.publisher.publish(runId, new ModelDelta(1, "fast"));
+                    return result(AgentStopReason.COMPLETED);
+                },
+                subscription -> subscription.events().subscribe(observed::offer)
+        );
+
+        assertEquals(AgentStopReason.COMPLETED, result.stopReason());
+        ExecutionStreamEvent event = observed.poll(5, TimeUnit.SECONDS);
+        assertNotNull(event);
+        assertEquals(new ModelDelta(1, "fast"), event.payload());
+        assertFalse(fixture.hub.isOpen(runId));
+    }
 
     @Test
     void recoveredSegmentAcceptsOneCancellationAndCleansStreamAndControl()
@@ -258,6 +282,16 @@ class StreamingRunExecutionLifecycleTest {
         );
     }
 
+    private com.multimodalAgent.agent.harness.AgentExecutionRequest freshRequest(String runId) {
+        return new com.multimodalAgent.agent.harness.AgentExecutionRequest(
+                new AgentRunSpec(
+                        runId, "chat-session", List.of(AgentMessage.user("hello")), 2
+                ),
+                "request-" + runId,
+                7L
+        );
+    }
+
     private static AgentRunResult result(AgentStopReason stopReason) {
         return new AgentRunResult(
                 "done",
@@ -299,6 +333,21 @@ class StreamingRunExecutionLifecycleTest {
                     null,
                     request.runtimeConfigSnapshotId(),
                     request.cancellationContext(),
+                    new RuntimeAttributes()
+            );
+            request.runtimeContextContributors().forEach(
+                    contributor -> contributor.contribute(context)
+            );
+            return context;
+        }
+
+        private AgentRuntimeContext enter(
+                com.multimodalAgent.agent.harness.AgentExecutionRequest request
+        ) {
+            AgentRuntimeContext context = new AgentRuntimeContext(
+                    request.runSpec().runId(), request.requestId(),
+                    request.runSpec().sessionId(), request.userId(),
+                    request.runtimeConfigSnapshotId(), request.cancellationContext(),
                     new RuntimeAttributes()
             );
             request.runtimeContextContributors().forEach(

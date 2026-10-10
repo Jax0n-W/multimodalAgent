@@ -24,12 +24,15 @@ import com.multimodalAgent.agent.service.memory.ShortTermMemoryService;
 import com.multimodalAgent.agent.service.memory.ShortTermMemoryService.MemoryMessage;
 import com.multimodalAgent.agent.service.multimodal.MultimodalAnalysis;
 import com.multimodalAgent.agent.service.multimodal.MultimodalSignal;
+import com.multimodalAgent.agent.service.chat.ChatMigrationFacade;
+import com.multimodalAgent.agent.service.chat.ChatRuntimeSessionRegistry;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -56,6 +59,8 @@ public class ChatService {
     private final PrivacySanitizer privacySanitizer;
     private final ShortTermMemoryService shortTermMemoryService;
     private final AiClient aiClient;
+    private final ChatRuntimeSessionRegistry runtimeSessions;
+    private final ObjectProvider<ChatMigrationFacade> migrationFacade;
 
     public ChatService(
             UserAccountRepository userAccountRepository,
@@ -70,7 +75,9 @@ public class ChatService {
             ToolOrchestrationService toolOrchestrationService,
             PrivacySanitizer privacySanitizer,
             ShortTermMemoryService shortTermMemoryService,
-            AiClient aiClient
+            AiClient aiClient,
+            ChatRuntimeSessionRegistry runtimeSessions,
+            ObjectProvider<ChatMigrationFacade> migrationFacade
     ) {
         this.userAccountRepository = userAccountRepository;
         this.chatSessionRepository = chatSessionRepository;
@@ -85,25 +92,51 @@ public class ChatService {
         this.privacySanitizer = privacySanitizer;
         this.shortTermMemoryService = shortTermMemoryService;
         this.aiClient = aiClient;
+        this.runtimeSessions = runtimeSessions;
+        this.migrationFacade = migrationFacade;
     }
 
     public Flux<ServerSentEvent<ChatStreamEvent>> streamChat(Long userId, ChatRequest request) {
-        // 聊天接口使用 SSE 流式返回；数据库读写放到 boundedElastic，避免阻塞响应线程。
-        return Mono.fromCallable(() -> prepare(userId, request, null))
+        return stream(userId, request, null);
+    }
+
+    public Flux<ServerSentEvent<ChatStreamEvent>> streamMultimodal(Long userId, ChatRequest request, MultimodalAnalysis analysis) {
+        return stream(userId, request, analysis);
+    }
+
+    private Flux<ServerSentEvent<ChatStreamEvent>> stream(
+            Long userId,
+            ChatRequest request,
+            MultimodalAnalysis analysis
+    ) {
+        // Routing is durable per session. A migrated session never silently falls back to Legacy.
+        return Mono.fromCallable(() -> shouldUseRuntime(userId, request))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMapMany(this::streamPrepared)
+                .flatMapMany(runtime -> runtime
+                        ? requireMigrationFacade().stream(userId, request, analysis)
+                        : Mono.fromCallable(() -> prepare(userId, request, analysis))
+                                .subscribeOn(Schedulers.boundedElastic())
+                                .flatMapMany(this::streamPrepared))
                 .onErrorResume(exception -> Flux.just(event(
                         "error",
                         ChatStreamEvent.error(null, "服务暂时不可用：" + exception.getMessage()))));
     }
 
-    public Flux<ServerSentEvent<ChatStreamEvent>> streamMultimodal(Long userId, ChatRequest request, MultimodalAnalysis analysis) {
-        return Mono.fromCallable(() -> prepare(userId, request, analysis))
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMapMany(this::streamPrepared)
-                .onErrorResume(exception -> Flux.just(event(
-                        "error",
-                        ChatStreamEvent.error(null, "服务暂时不可用：" + exception.getMessage()))));
+    private boolean shouldUseRuntime(Long userId, ChatRequest request) {
+        if (request.sessionId() != null && !request.sessionId().isBlank()) {
+            return runtimeSessions.isRuntimeSession(userId, request.sessionId());
+        }
+        return properties.getRuntime().getChatMigration().isEnabled();
+    }
+
+    private ChatMigrationFacade requireMigrationFacade() {
+        ChatMigrationFacade facade = migrationFacade.getIfAvailable();
+        if (facade == null) {
+            throw new IllegalStateException(
+                    "Chat migration requires multimodal-agent.runtime.enabled=true"
+            );
+        }
+        return facade;
     }
 
     private PreparedConversation prepare(Long userId, ChatRequest request, MultimodalAnalysis multimodalAnalysis) {

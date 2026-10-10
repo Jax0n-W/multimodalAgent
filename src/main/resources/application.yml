@@ -73,6 +73,8 @@ multimodal-agent:
       max-total-chars: ${AGENT_MEMORY_MAX_TOTAL_CHARS:12000}
     skills:
       enabled: ${AGENT_SKILLS_ENABLED:false}
+    chat-migration:
+      enabled: ${AGENT_CHAT_MIGRATION_ENABLED:false}
     budget:
       max-model-calls: ${AGENT_BUDGET_MAX_MODEL_CALLS:}
       max-tool-calls: ${AGENT_BUDGET_MAX_TOOL_CALLS:}

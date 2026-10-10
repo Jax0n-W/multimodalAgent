@@ -4,9 +4,11 @@ import com.multimodalAgent.agent.harness.AgentExecutionRequest;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.streaming.ExecutionStreamHub;
 import com.multimodalAgent.agent.streaming.ExecutionStreamPublisher;
+import com.multimodalAgent.agent.streaming.ExecutionStreamSubscription;
 
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.Consumer;
 
 /**
  * Outer production execution entry for P8.3 observation and P8.4 local control. P6 admission
@@ -40,5 +42,18 @@ public final class StreamingAgentExecutionService {
     public AgentRunResult execute(AgentExecutionRequest request) {
         Objects.requireNonNull(request, "request must not be null");
         return lifecycle.executeFresh(request, execution);
+    }
+
+    /**
+     * Executes a fresh run and attaches a live observer synchronously after durable admission
+     * opens the run stream, but before Runtime middleware or the first model call can start.
+     */
+    public AgentRunResult execute(
+            AgentExecutionRequest request,
+            Consumer<ExecutionStreamSubscription> observer
+    ) {
+        Objects.requireNonNull(request, "request must not be null");
+        Objects.requireNonNull(observer, "observer must not be null");
+        return lifecycle.executeFresh(request, execution, observer);
     }
 }

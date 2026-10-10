@@ -34,7 +34,7 @@ class SkillProductionConfigurationTest {
         ).assemble(input("我最近睡不着"));
 
         assertEquals(0, memoryReads.get());
-        assertEquals(List.of("request-messages"), snapshot.orderedContributions().stream()
+        assertEquals(List.of("chat-business-context", "request-messages"), snapshot.orderedContributions().stream()
                 .map(value -> value.sourceId()).toList());
         assertEquals(List.of(AgentMessage.user("我最近睡不着")), snapshot.messages());
     }
@@ -48,7 +48,7 @@ class SkillProductionConfigurationTest {
                 properties, new ObjectMapper(), query -> List.of()
         ).assemble(input("我最近睡不着"));
 
-        assertEquals(List.of("agent-skills", "request-messages"),
+        assertEquals(List.of("agent-skills", "chat-business-context", "request-messages"),
                 snapshot.orderedContributions().stream().map(value -> value.sourceId()).toList());
         assertEquals(2, snapshot.messages().size());
         assertEquals("Trusted Skill: sleep-guidance@2", snapshot.messages().get(0)
@@ -69,7 +69,9 @@ class SkillProductionConfigurationTest {
                 properties, new ObjectMapper(), reader
         ).assemble(input("sleep trouble"));
 
-        assertEquals(List.of("agent-skills", "conversation-memory", "request-messages"),
+        assertEquals(List.of(
+                        "agent-skills", "chat-business-context",
+                        "conversation-memory", "request-messages"),
                 snapshot.orderedContributions().stream().map(value -> value.sourceId()).toList());
     }
 

@@ -56,6 +56,7 @@ public class multimodalAgentProperties {
         private final Budget budget = new Budget();
         private final Memory memory = new Memory();
         private final Skills skills = new Skills();
+        private final ChatMigration chatMigration = new ChatMigration();
 
         public boolean isEnabled() {
             return enabled;
@@ -75,6 +76,22 @@ public class multimodalAgentProperties {
 
         public Skills getSkills() {
             return skills;
+        }
+
+        public ChatMigration getChatMigration() {
+            return chatMigration;
+        }
+    }
+
+    public static class ChatMigration {
+        private boolean enabled;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 

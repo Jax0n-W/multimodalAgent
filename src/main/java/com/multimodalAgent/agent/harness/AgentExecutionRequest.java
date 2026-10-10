@@ -2,6 +2,7 @@ package com.multimodalAgent.agent.harness;
 
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.extension.CancellationContext;
+import com.multimodalAgent.agent.runtime.model.AgentMessage;
 
 import java.util.List;
 import java.util.Objects;
@@ -18,7 +19,8 @@ public record AgentExecutionRequest(
         String runtimeConfigSnapshotId,
         String contextSnapshotId,
         CancellationContext cancellationContext,
-        List<AgentRuntimeContextContributor> runtimeContextContributors
+        List<AgentRuntimeContextContributor> runtimeContextContributors,
+        List<AgentMessage> trustedBusinessContext
 ) {
 
     public AgentExecutionRequest {
@@ -38,6 +40,25 @@ public record AgentExecutionRequest(
             );
         }
         runtimeContextContributors = List.copyOf(runtimeContextContributors);
+        trustedBusinessContext = List.copyOf(Objects.requireNonNull(
+                trustedBusinessContext,
+                "trustedBusinessContext must not be null"
+        ));
+    }
+
+    public AgentExecutionRequest(
+            AgentRunSpec runSpec,
+            String requestId,
+            Long userId,
+            String runtimeConfigSnapshotId,
+            String contextSnapshotId,
+            CancellationContext cancellationContext,
+            List<AgentRuntimeContextContributor> runtimeContextContributors
+    ) {
+        this(
+                runSpec, requestId, userId, runtimeConfigSnapshotId, contextSnapshotId,
+                cancellationContext, runtimeContextContributors, List.of()
+        );
     }
 
     public AgentExecutionRequest(
@@ -54,6 +75,7 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 null,
                 cancellationContext,
+                List.of(),
                 List.of()
         );
     }
@@ -73,7 +95,8 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 null,
                 cancellationContext,
-                runtimeContextContributors
+                runtimeContextContributors,
+                List.of()
         );
     }
 
@@ -92,6 +115,7 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 contextSnapshotId,
                 cancellationContext,
+                List.of(),
                 List.of()
         );
     }
@@ -114,7 +138,8 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 contextSnapshotId,
                 cancellationContext,
-                contributors
+                contributors,
+                trustedBusinessContext
         );
     }
 
@@ -126,7 +151,8 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 contextSnapshotId,
                 Objects.requireNonNull(context, "context must not be null"),
-                runtimeContextContributors
+                runtimeContextContributors,
+                trustedBusinessContext
         );
     }
 
@@ -141,7 +167,8 @@ public record AgentExecutionRequest(
                 snapshotId,
                 contextSnapshotId,
                 cancellationContext,
-                runtimeContextContributors
+                runtimeContextContributors,
+                trustedBusinessContext
         );
     }
 
@@ -156,7 +183,8 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 snapshotId,
                 cancellationContext,
-                runtimeContextContributors
+                runtimeContextContributors,
+                trustedBusinessContext
         );
     }
 
@@ -168,7 +196,21 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 contextSnapshotId,
                 cancellationContext,
-                runtimeContextContributors
+                runtimeContextContributors,
+                trustedBusinessContext
+        );
+    }
+
+    public AgentExecutionRequest withTrustedBusinessContext(List<AgentMessage> messages) {
+        return new AgentExecutionRequest(
+                runSpec,
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                contextSnapshotId,
+                cancellationContext,
+                runtimeContextContributors,
+                messages
         );
     }
 

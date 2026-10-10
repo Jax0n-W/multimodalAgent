@@ -7,11 +7,13 @@ import com.multimodalAgent.agent.harness.RecoveryExecutionRequest;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
 import com.multimodalAgent.agent.streaming.ExecutionStreamHub;
 import com.multimodalAgent.agent.streaming.ExecutionStreamPublisher;
+import com.multimodalAgent.agent.streaming.ExecutionStreamSubscription;
 import com.multimodalAgent.agent.streaming.bridge.ModelDeltaStreamBridge;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.function.Consumer;
 
 /** Shared node-local observation and cancellation lifecycle for one active execution segment. */
 public final class StreamingRunExecutionLifecycle {
@@ -38,6 +40,25 @@ public final class StreamingRunExecutionLifecycle {
             AgentExecutionRequest request,
             Function<AgentExecutionRequest, AgentRunResult> execution
     ) {
+        return executeFreshObserved(request, execution, null);
+    }
+
+    public AgentRunResult executeFresh(
+            AgentExecutionRequest request,
+            Function<AgentExecutionRequest, AgentRunResult> execution,
+            Consumer<ExecutionStreamSubscription> observer
+    ) {
+        Objects.requireNonNull(request, "request must not be null");
+        Objects.requireNonNull(execution, "execution must not be null");
+        Objects.requireNonNull(observer, "observer must not be null");
+        return executeFreshObserved(request, execution, observer);
+    }
+
+    private AgentRunResult executeFreshObserved(
+            AgentExecutionRequest request,
+            Function<AgentExecutionRequest, AgentRunResult> execution,
+            Consumer<ExecutionStreamSubscription> observer
+    ) {
         Objects.requireNonNull(request, "request must not be null");
         Objects.requireNonNull(execution, "execution must not be null");
         String runId = request.runSpec().runId();
@@ -45,7 +66,7 @@ public final class StreamingRunExecutionLifecycle {
         AtomicBoolean openedByThisSegment = new AtomicBoolean();
         AgentExecutionRequest observed = request.withCancellationContext(control)
                 .withRuntimeContextContributor(initializer(
-                        runId, control, openedByThisSegment
+                        runId, control, openedByThisSegment, observer
                 ));
         return invoke(
                 runId,
@@ -66,7 +87,7 @@ public final class StreamingRunExecutionLifecycle {
         AtomicBoolean openedByThisSegment = new AtomicBoolean();
         RecoveryExecutionRequest observed = request.withCancellationContext(control)
                 .withRuntimeContextContributor(initializer(
-                        runId, control, openedByThisSegment
+                        runId, control, openedByThisSegment, null
                 ));
         return invoke(
                 runId,
@@ -79,12 +100,16 @@ public final class StreamingRunExecutionLifecycle {
     private AgentRuntimeContextContributor initializer(
             String runId,
             LocalExecutionControlRegistry.Entry control,
-            AtomicBoolean openedByThisSegment
+            AtomicBoolean openedByThisSegment,
+            Consumer<ExecutionStreamSubscription> observer
     ) {
         return context -> {
             hub.openRun(runId);
             openedByThisSegment.set(true);
             controls.register(control);
+            if (observer != null) {
+                observer.accept(hub.subscribe(runId));
+            }
             StreamingModelInvocationScope.registerObserver(
                     context,
                     new ModelDeltaStreamBridge(runId, publisher)

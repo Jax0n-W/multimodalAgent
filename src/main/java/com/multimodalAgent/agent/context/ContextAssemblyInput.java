@@ -1,6 +1,7 @@
 package com.multimodalAgent.agent.context;
 
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
+import com.multimodalAgent.agent.runtime.model.AgentMessageRole;
 
 import java.util.List;
 import java.util.Collections;
@@ -13,7 +14,8 @@ public record ContextAssemblyInput(
         String sessionId,
         Long userId,
         List<AgentMessage> requestMessages,
-        Set<String> allowedTools
+        Set<String> allowedTools,
+        List<AgentMessage> trustedBusinessContext
 ) {
 
     public ContextAssemblyInput {
@@ -38,6 +40,31 @@ public record ContextAssemblyInput(
             sortedTools.add(tool);
         }
         allowedTools = Collections.unmodifiableSet(sortedTools);
+        trustedBusinessContext = List.copyOf(Objects.requireNonNull(
+                trustedBusinessContext,
+                "trustedBusinessContext must not be null"
+        ));
+        for (AgentMessage message : trustedBusinessContext) {
+            Objects.requireNonNull(message, "trustedBusinessContext must not contain null");
+            if (message.role() != AgentMessageRole.SYSTEM
+                    || !message.toolCalls().isEmpty()
+                    || message.toolCallId() != null
+                    || message.toolName() != null) {
+                throw new IllegalArgumentException(
+                        "trustedBusinessContext must contain plain SYSTEM messages only"
+                );
+            }
+        }
+    }
+
+    public ContextAssemblyInput(
+            String runId,
+            String sessionId,
+            Long userId,
+            List<AgentMessage> requestMessages,
+            Set<String> allowedTools
+    ) {
+        this(runId, sessionId, userId, requestMessages, allowedTools, List.of());
     }
 
     public ContextAssemblyInput(
@@ -46,7 +73,7 @@ public record ContextAssemblyInput(
             Long userId,
             List<AgentMessage> requestMessages
     ) {
-        this(runId, sessionId, userId, requestMessages, Set.of());
+        this(runId, sessionId, userId, requestMessages, Set.of(), List.of());
     }
 
     private static void requireText(String value, String field) {

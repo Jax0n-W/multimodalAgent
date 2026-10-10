@@ -14,6 +14,7 @@ import com.multimodalAgent.agent.context.AgentContextSnapshotStore;
 import com.multimodalAgent.agent.context.ContextAssemblingAgentExecutionCoordinator;
 import com.multimodalAgent.agent.context.RequestMessageContextSource;
 import com.multimodalAgent.agent.context.ContextSource;
+import com.multimodalAgent.agent.context.ChatBusinessContextSource;
 import com.multimodalAgent.agent.context.memory.ConversationMemoryPolicy;
 import com.multimodalAgent.agent.context.memory.ConversationMemoryReader;
 import com.multimodalAgent.agent.context.memory.ConversationMemorySource;
@@ -183,6 +184,7 @@ public class StreamingAgentExecutionConfiguration {
             ConversationMemoryReader memoryReader
     ) {
         List<ContextSource> sources = new ArrayList<>();
+        sources.add(new ChatBusinessContextSource());
         if (properties.getRuntime().getSkills().isEnabled()) {
             sources.add(new SkillContextSource(
                     new DeterministicSkillResolver(BuiltInSkills.registry())

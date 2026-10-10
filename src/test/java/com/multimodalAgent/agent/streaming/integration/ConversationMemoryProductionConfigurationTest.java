@@ -33,7 +33,7 @@ class ConversationMemoryProductionConfigurationTest {
         ).assemble(input());
 
         assertEquals(0, reads.get());
-        assertEquals(List.of("request-messages"), snapshot.orderedContributions().stream()
+        assertEquals(List.of("chat-business-context", "request-messages"), snapshot.orderedContributions().stream()
                 .map(value -> value.sourceId()).toList());
         assertEquals(List.of(AgentMessage.user("current")), snapshot.messages());
     }
@@ -53,7 +53,7 @@ class ConversationMemoryProductionConfigurationTest {
                 properties, new ObjectMapper(), reader
         ).assemble(input());
 
-        assertEquals(List.of("conversation-memory", "request-messages"),
+        assertEquals(List.of("chat-business-context", "conversation-memory", "request-messages"),
                 snapshot.orderedContributions().stream().map(value -> value.sourceId()).toList());
         assertEquals(List.of(
                 AgentMessage.user("old-user"),
