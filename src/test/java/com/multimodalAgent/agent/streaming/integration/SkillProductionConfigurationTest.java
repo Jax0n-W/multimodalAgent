@@ -51,7 +51,7 @@ class SkillProductionConfigurationTest {
         assertEquals(List.of("agent-skills", "request-messages"),
                 snapshot.orderedContributions().stream().map(value -> value.sourceId()).toList());
         assertEquals(2, snapshot.messages().size());
-        assertEquals("Trusted Skill: sleep-guidance@1", snapshot.messages().get(0)
+        assertEquals("Trusted Skill: sleep-guidance@2", snapshot.messages().get(0)
                 .content().lines().findFirst().orElseThrow());
     }
 

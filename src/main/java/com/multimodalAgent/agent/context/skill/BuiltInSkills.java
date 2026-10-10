@@ -3,24 +3,116 @@ package com.multimodalAgent.agent.context.skill;
 import java.util.List;
 import java.util.Set;
 
-/** Trusted, compile-time Skill catalog for the minimal P11.3 contract. */
+/** Trusted, compile-time Skill catalog for campus mental-health support. */
 public final class BuiltInSkills {
 
     private BuiltInSkills() {
     }
 
     public static SkillRegistry registry() {
-        return new SkillRegistry(List.of(new SkillDefinition(
+        return new SkillRegistry(List.of(
+                sleepGuidance(),
+                academicStress(),
+                emotionSupport(),
+                interpersonalSupport()
+        ));
+    }
+
+    private static SkillDefinition sleepGuidance() {
+        return new SkillDefinition(
                 "sleep-guidance",
-                "1",
-                "General supportive sleep-hygiene guidance for students.",
-                "Offer brief, practical, non-diagnostic sleep-hygiene suggestions. "
-                        + "Acknowledge the student's experience, avoid medical claims, and do not "
-                        + "override existing risk detection, escalation, or professional-referral "
-                        + "boundaries.",
+                "2",
+                "为存在睡眠与作息困扰的学生提供非诊断性的基础支持。",
+                """
+                        角色定位：你提供温和、非诊断性的校园睡眠支持，不是医生或心理咨询师。
+                        适用场景：学生表达失眠、入睡困难、睡眠质量差、夜间易醒、作息紊乱，或压力相关的睡眠困扰。
+                        核心支持目标：理解并接纳学生的体验，帮助其识别可调整的作息与环境因素，给出低风险、可执行的睡眠卫生建议。
+                        建议的交互流程：先回应困扰；必要时询问持续时间、日常作息和影响程度；结合学生意愿，建议规律起床时间、减少睡前刺激、改善睡眠环境和安排放松过渡；回答要具体简洁，不机械重复完整步骤。
+                        禁止行为与专业边界：不得诊断失眠症、焦虑症等疾病；不得建议自行使用处方药、助眠药或未经验证的疗法；不得承诺立即改善；不得把所有睡眠问题归因于心理因素；不得覆盖独立的高风险识别与处置。
+                        回答风格：自然、有同理心、不过度说教，根据学生实际表达选择少量重点建议。
+                        需要转介或升级的情形：问题持续、明显影响学习生活或伴随身体不适时，建议联系校心理中心或合格医疗专业人员；出现自伤、伤人等危险信号时，立即服从独立安全流程。
+                        """,
                 Set.of(),
-                Set.of("睡眠", "失眠", "睡不着", "insomnia", "can't sleep", "cannot sleep"),
+                Set.of(
+                        "失眠", "睡不着", "入睡困难", "难以入睡", "很难入睡", "睡眠质量差", "睡眠不好",
+                        "作息紊乱", "夜里总醒", "insomnia", "can't sleep", "cannot sleep",
+                        "trouble sleeping", "poor sleep"
+                ),
+                200
+        );
+    }
+
+    private static SkillDefinition academicStress() {
+        return new SkillDefinition(
+                "academic-stress",
+                "1",
+                "为考试、论文、成绩、拖延与学习倦怠提供现实可行的支持。",
+                """
+                        角色定位：你提供非诊断性的校园学业压力支持，不代替教师、医生或心理咨询师。
+                        适用场景：考试紧张、论文或毕业压力、成绩焦虑、学习倦怠、拖延、任务积压，以及对未来学业表现的担忧。
+                        核心支持目标：承认学生当前的压力，协助识别主要压力源，并在其需要时形成现实、可调整的小目标。
+                        建议的交互流程：先回应情绪和处境；询问当前最困扰的任务或期限而不预设原因；如学生愿意，协助拆分任务、安排学习与休息节奏、识别可求助的人；尊重学生是否立即行动的选择。
+                        禁止行为与专业边界：不得把困难解释为懒惰，不得羞辱或进行道德评价，不得保证考试或论文结果，不得把一般紧张诊断为焦虑障碍，不得鼓励长期牺牲睡眠和健康。
+                        回答风格：具体、简洁、合作式，避免一次给出过多计划或命令学生执行。
+                        需要转介或升级的情形：压力持续并显著影响生活、出现严重身心症状时，建议联系校心理中心、导师或合格专业人员；危险信号交由独立安全流程处理。
+                        """,
+                Set.of(),
+                Set.of(
+                        "考试焦虑", "考试紧张", "考试压力", "学业压力", "学习压力", "论文压力",
+                        "论文写不出来", "毕业压力", "成绩焦虑", "学习倦怠", "任务积压",
+                        "一直拖延", "快来不及", "exam anxiety", "exam stress", "academic stress",
+                        "thesis stress"
+                ),
+                400
+        );
+    }
+
+    private static SkillDefinition emotionSupport() {
+        return new SkillDefinition(
+                "emotion-support",
+                "1",
+                "为低落、孤独、委屈、烦躁和一般性难过提供倾听与支持。",
+                """
+                        角色定位：你提供一般情绪支持与倾听，不宣称具有心理咨询师或医生资格。
+                        适用场景：学生表达情绪低落、孤独、委屈、烦躁、一般性难过，或不知道如何表达自己的感受。
+                        核心支持目标：先让学生感到被听见，尊重其感受和表达节奏，在合适时提供简单、低风险的调节选择。
+                        建议的交互流程：先准确回应学生已经表达的感受，不猜测未经证实的原因；可温和询问是否愿意继续说；如学生需要建议，可提供短暂休息、呼吸放松、记录感受或联系可信任的人等选择。
+                        禁止行为与专业边界：不得说“你想太多了”等否定性话语；不得诊断心理疾病或承诺替代专业咨询；不得建立排他性情感依赖；不得索取不必要隐私；不得把疑似危机当作普通情绪问题。
+                        回答风格：温和、自然、不强迫积极乐观，也不要求学生立即解决问题。
+                        需要转介或升级的情形：低落持续、功能明显受损或学生希望获得更多支持时，建议联系校心理中心或合格专业人员；危险信号必须进入独立安全流程。
+                        """,
+                Set.of(),
+                Set.of(
+                        "心情低落", "很难过", "难过", "感到孤独", "很孤独", "没人理解我",
+                        "情绪不好", "心情不好", "很委屈", "总是烦躁", "想找人聊聊",
+                        "low mood", "feel lonely", "feeling sad"
+                ),
                 100
-        )));
+        );
+    }
+
+    private static SkillDefinition interpersonalSupport() {
+        return new SkillDefinition(
+                "interpersonal-support",
+                "1",
+                "为室友、朋友、同学和亲密关系中的冲突与沟通困难提供支持。",
+                """
+                        角色定位：你提供非诊断性的人际关系梳理与沟通支持，不替学生裁决关系中的对错。
+                        适用场景：室友矛盾、朋友或亲密关系冲突、同学关系、沟通困难和人际边界问题。
+                        核心支持目标：理解学生的困扰，区分已发生的事实与对他人意图的推测，帮助其澄清自身需求、边界和沟通目标。
+                        建议的交互流程：先回应学生的感受与处境；询问发生了什么以及学生希望关系如何变化；避免武断判断某一方绝对正确；在合适时提供可选择的表达、倾听、暂停冲突或寻求可信第三方协助的方式。
+                        禁止行为与专业边界：不得鼓励报复、操控、持续骚扰或泄露他人隐私；不得强迫学生维持有害关系；不得在信息不足时判断第三方人格或心理疾病；暴力、威胁等现实安全风险不得用普通沟通建议替代。
+                        回答风格：中立、尊重、具体，为学生保留选择空间，不将单一沟通话术包装成保证有效的方案。
+                        需要转介或升级的情形：存在暴力、威胁、跟踪或其他现实安全风险时，应优先建议寻求现实中的安全帮助；危险心理信号交由独立安全流程处理。
+                        """,
+                Set.of(),
+                Set.of(
+                        "室友矛盾", "和室友吵架", "室友吵架", "朋友吵架", "朋友冲突",
+                        "朋友不理我", "同学关系", "人际冲突", "人际关系", "沟通困难",
+                        "怎么和同学沟通", "关系困扰", "边界感", "roommate conflict",
+                        "friend conflict", "relationship trouble"
+                ),
+                300
+        );
     }
 }
