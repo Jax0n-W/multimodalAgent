@@ -13,6 +13,10 @@ import com.multimodalAgent.agent.context.AgentContextSnapshotFactory;
 import com.multimodalAgent.agent.context.AgentContextSnapshotStore;
 import com.multimodalAgent.agent.context.ContextAssemblingAgentExecutionCoordinator;
 import com.multimodalAgent.agent.context.RequestMessageContextSource;
+import com.multimodalAgent.agent.context.ContextSource;
+import com.multimodalAgent.agent.context.memory.ConversationMemoryPolicy;
+import com.multimodalAgent.agent.context.memory.ConversationMemoryReader;
+import com.multimodalAgent.agent.context.memory.ConversationMemorySource;
 import com.multimodalAgent.agent.coordination.RunLeaseStore;
 import com.multimodalAgent.agent.coordination.integration.CoordinatedAgentExecutionCoordinator;
 import com.multimodalAgent.agent.coordination.integration.ExecutionCoordinationBoundaryMiddleware;
@@ -170,6 +174,31 @@ public class StreamingAgentExecutionConfiguration {
     }
 
     @Bean
+    public AgentContextAssembler agentContextAssembler(
+            multimodalAgentProperties properties,
+            ObjectMapper objectMapper,
+            ConversationMemoryReader memoryReader
+    ) {
+        List<ContextSource> sources = new ArrayList<>();
+        multimodalAgentProperties.Memory memory = properties.getRuntime().getMemory();
+        if (memory.isEnabled()) {
+            sources.add(new ConversationMemorySource(
+                    memoryReader,
+                    new ConversationMemoryPolicy(
+                            memory.getMaxTurns(),
+                            memory.getMaxTotalChars()
+                    )
+            ));
+        }
+        sources.add(new RequestMessageContextSource());
+        return new AgentContextAssembler(
+                sources,
+                new AgentContextSnapshotFactory(objectMapper),
+                Clock.systemUTC()
+        );
+    }
+
+    @Bean
     public StreamingModelInvocationScope agentStreamingModelInvocationScope() {
         return new StreamingModelInvocationScope();
     }
@@ -240,6 +269,7 @@ public class StreamingAgentExecutionConfiguration {
             ExecutionConfigSnapshotFactory snapshotFactory,
             ExecutionConfigSnapshotStore snapshotStore,
             AgentContextSnapshotStore contextSnapshotStore,
+            AgentContextAssembler contextAssembler,
             RecoveryCheckpointStore recoveryCheckpointStore,
             ToolRecoveryContractBindingMiddleware toolRecoveryContractBindingMiddleware,
             ToolOutcomeRecorder toolOutcomeRecorder,
@@ -317,11 +347,7 @@ public class StreamingAgentExecutionConfiguration {
                 );
         ContextAssemblingAgentExecutionCoordinator contextAssembling =
                 new ContextAssemblingAgentExecutionCoordinator(
-                        new AgentContextAssembler(
-                                List.of(new RequestMessageContextSource()),
-                                new AgentContextSnapshotFactory(objectMapper),
-                                Clock.systemUTC()
-                        ),
+                        contextAssembler,
                         contextSnapshotStore,
                         snapshotting::execute
                 );

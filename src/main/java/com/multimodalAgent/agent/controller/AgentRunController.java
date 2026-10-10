@@ -50,7 +50,7 @@ public final class AgentRunController {
     ) {
         AgentRunSpec spec = new AgentRunSpec(
                 request.runId(),
-                request.runId(),
+                request.sessionId() == null ? request.runId() : request.sessionId(),
                 List.of(AgentMessage.user(request.message())),
                 3,
                 Set.of("knowledge_search"),

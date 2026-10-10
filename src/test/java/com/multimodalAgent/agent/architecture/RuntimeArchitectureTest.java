@@ -118,6 +118,15 @@ class RuntimeArchitectureTest {
     }
 
     @Test
+    void recoveryMustNotReloadConversationMemory() {
+        noClasses().that().resideInAPackage("com.multimodalAgent.agent.recovery..")
+                .should().dependOnClassesThat().resideInAPackage(
+                        "com.multimodalAgent.agent.context.memory.."
+                )
+                .check(recoveryClasses);
+    }
+
+    @Test
     void runtimeMustNotDependOnLiveStreamingOrTransportTypes() {
         noClasses().that().resideInAPackage(RUNTIME)
                 .should().dependOnClassesThat().resideInAnyPackage(

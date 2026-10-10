@@ -54,6 +54,7 @@ public class multimodalAgentProperties {
     public static class AgentRuntime {
         private boolean enabled;
         private final Budget budget = new Budget();
+        private final Memory memory = new Memory();
 
         public boolean isEnabled() {
             return enabled;
@@ -65,6 +66,48 @@ public class multimodalAgentProperties {
 
         public Budget getBudget() {
             return budget;
+        }
+
+        public Memory getMemory() {
+            return memory;
+        }
+    }
+
+    public static class Memory {
+        private boolean enabled;
+        private int maxTurns = 6;
+        private int maxTotalChars = 12000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getMaxTurns() {
+            return maxTurns;
+        }
+
+        public void setMaxTurns(int maxTurns) {
+            if (maxTurns <= 0) {
+                throw new IllegalArgumentException("runtime.memory.max-turns must be positive");
+            }
+            this.maxTurns = maxTurns;
+        }
+
+        public int getMaxTotalChars() {
+            return maxTotalChars;
+        }
+
+        public void setMaxTotalChars(int maxTotalChars) {
+            if (maxTotalChars <= 0) {
+                throw new IllegalArgumentException(
+                        "runtime.memory.max-total-chars must be positive"
+                );
+            }
+            this.maxTotalChars = maxTotalChars;
         }
     }
 

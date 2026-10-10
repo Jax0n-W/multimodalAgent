@@ -11,6 +11,7 @@ import com.multimodalAgent.agent.coordination.RunLeaseRenewResult;
 import com.multimodalAgent.agent.coordination.RunLeaseStore;
 import com.multimodalAgent.agent.coordination.integration.ExecutionCoordinationBoundaryMiddleware;
 import com.multimodalAgent.agent.coordination.watchdog.RunLeaseWatchdog;
+import com.multimodalAgent.agent.context.memory.ConversationMemoryReader;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.StreamingModelInvocationScope;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshot;
 import com.multimodalAgent.agent.execution.config.ExecutionConfigSnapshotFactory;
@@ -96,6 +97,11 @@ class RecoveryEngineSuccessfulPathIntegrationTest {
 
     @Test
     void repairsCheckpointAndResumesTheExistingRunThroughFinalization() {
+        AtomicInteger memoryReads = new AtomicInteger();
+        ConversationMemoryReader countingMemoryReader = query -> {
+            memoryReads.incrementAndGet();
+            return List.of();
+        };
         ObjectMapper objectMapper = new ObjectMapper();
         ResolvedModelConfig modelConfig = new ResolvedModelConfig(
                 new ModelIdentity("test", "recovery-model"),
@@ -246,6 +252,8 @@ class RecoveryEngineSuccessfulPathIntegrationTest {
         assertSame(originalSnapshot, snapshots.snapshot);
         assertEquals(0, controls.activeCount());
         assertFalse(hub.isOpen(RUN_ID));
+        assertNotNull(countingMemoryReader);
+        assertEquals(0, memoryReads.get());
     }
 
     @Test
