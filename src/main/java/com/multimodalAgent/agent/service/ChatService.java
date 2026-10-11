@@ -12,7 +12,6 @@ import com.multimodalAgent.agent.dto.ChatRequest;
 import com.multimodalAgent.agent.dto.ChatStreamEvent;
 import com.multimodalAgent.agent.repository.ChatMessageRepository;
 import com.multimodalAgent.agent.repository.ChatSessionRepository;
-import com.multimodalAgent.agent.repository.PsychologicalReportRepository;
 import com.multimodalAgent.agent.repository.UserAccountRepository;
 import com.multimodalAgent.agent.service.ai.AiClient;
 import com.multimodalAgent.agent.service.ai.AiMessage;
@@ -49,7 +48,6 @@ public class ChatService {
     private final UserAccountRepository userAccountRepository;
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
-    private final PsychologicalReportRepository reportRepository;
     private final multimodalAgentProperties properties;
     private final IntentClassifier intentClassifier;
     private final PsychologicalAssessmentService assessmentService;
@@ -66,7 +64,6 @@ public class ChatService {
             UserAccountRepository userAccountRepository,
             ChatSessionRepository chatSessionRepository,
             ChatMessageRepository chatMessageRepository,
-            PsychologicalReportRepository reportRepository,
             multimodalAgentProperties properties,
             IntentClassifier intentClassifier,
             PsychologicalAssessmentService assessmentService,
@@ -82,7 +79,6 @@ public class ChatService {
         this.userAccountRepository = userAccountRepository;
         this.chatSessionRepository = chatSessionRepository;
         this.chatMessageRepository = chatMessageRepository;
-        this.reportRepository = reportRepository;
         this.properties = properties;
         this.intentClassifier = intentClassifier;
         this.assessmentService = assessmentService;
@@ -207,10 +203,6 @@ public class ChatService {
             if (!assistantReply.isEmpty()) {
                 saveMessage(prepared.user(), prepared.session(), MessageRole.ASSISTANT, assistantReply.toString());
             }
-            // 工具链在模型回复完成后异步执行，不打断学生端正在进行的对话体验。
-            if (prepared.reportId() != null) {
-                toolOrchestrationService.handleAsync(prepared.reportId());
-            }
             return event("done", ChatStreamEvent.done(prepared.session().getPublicId()));
         }).subscribeOn(Schedulers.boundedElastic());
 
@@ -287,7 +279,7 @@ public class ChatService {
         if (multimodalAnalysis != null) {
             report.setEmotionTags(multimodalAnalysis.emotionTagsJson());
         }
-        return reportRepository.save(report);
+        return toolOrchestrationService.persistReportWithNotificationIntents(report);
     }
 
     private List<AiMessage> buildMessages(

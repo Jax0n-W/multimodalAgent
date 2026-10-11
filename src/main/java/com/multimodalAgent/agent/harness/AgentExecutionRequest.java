@@ -3,6 +3,7 @@ package com.multimodalAgent.agent.harness;
 import com.multimodalAgent.agent.runtime.AgentRunSpec;
 import com.multimodalAgent.agent.runtime.extension.CancellationContext;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
+import com.multimodalAgent.agent.context.UntrustedEvidence;
 
 import java.util.List;
 import java.util.Objects;
@@ -20,7 +21,8 @@ public record AgentExecutionRequest(
         String contextSnapshotId,
         CancellationContext cancellationContext,
         List<AgentRuntimeContextContributor> runtimeContextContributors,
-        List<AgentMessage> trustedBusinessContext
+        List<AgentMessage> trustedBusinessContext,
+        List<UntrustedEvidence> untrustedEvidence
 ) {
 
     public AgentExecutionRequest {
@@ -44,6 +46,31 @@ public record AgentExecutionRequest(
                 trustedBusinessContext,
                 "trustedBusinessContext must not be null"
         ));
+        untrustedEvidence = List.copyOf(Objects.requireNonNull(
+                untrustedEvidence,
+                "untrustedEvidence must not be null"
+        ));
+        untrustedEvidence.forEach(evidence -> Objects.requireNonNull(
+                evidence,
+                "untrustedEvidence must not contain null"
+        ));
+    }
+
+    public AgentExecutionRequest(
+            AgentRunSpec runSpec,
+            String requestId,
+            Long userId,
+            String runtimeConfigSnapshotId,
+            String contextSnapshotId,
+            CancellationContext cancellationContext,
+            List<AgentRuntimeContextContributor> runtimeContextContributors,
+            List<AgentMessage> trustedBusinessContext
+    ) {
+        this(
+                runSpec, requestId, userId, runtimeConfigSnapshotId, contextSnapshotId,
+                cancellationContext, runtimeContextContributors, trustedBusinessContext,
+                List.of()
+        );
     }
 
     public AgentExecutionRequest(
@@ -57,7 +84,7 @@ public record AgentExecutionRequest(
     ) {
         this(
                 runSpec, requestId, userId, runtimeConfigSnapshotId, contextSnapshotId,
-                cancellationContext, runtimeContextContributors, List.of()
+                cancellationContext, runtimeContextContributors, List.of(), List.of()
         );
     }
 
@@ -75,6 +102,7 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 null,
                 cancellationContext,
+                List.of(),
                 List.of(),
                 List.of()
         );
@@ -96,6 +124,7 @@ public record AgentExecutionRequest(
                 null,
                 cancellationContext,
                 runtimeContextContributors,
+                List.of(),
                 List.of()
         );
     }
@@ -115,6 +144,7 @@ public record AgentExecutionRequest(
                 runtimeConfigSnapshotId,
                 contextSnapshotId,
                 cancellationContext,
+                List.of(),
                 List.of(),
                 List.of()
         );
@@ -139,7 +169,8 @@ public record AgentExecutionRequest(
                 contextSnapshotId,
                 cancellationContext,
                 contributors,
-                trustedBusinessContext
+                trustedBusinessContext,
+                untrustedEvidence
         );
     }
 
@@ -152,7 +183,8 @@ public record AgentExecutionRequest(
                 contextSnapshotId,
                 Objects.requireNonNull(context, "context must not be null"),
                 runtimeContextContributors,
-                trustedBusinessContext
+                trustedBusinessContext,
+                untrustedEvidence
         );
     }
 
@@ -168,7 +200,8 @@ public record AgentExecutionRequest(
                 contextSnapshotId,
                 cancellationContext,
                 runtimeContextContributors,
-                trustedBusinessContext
+                trustedBusinessContext,
+                untrustedEvidence
         );
     }
 
@@ -184,7 +217,8 @@ public record AgentExecutionRequest(
                 snapshotId,
                 cancellationContext,
                 runtimeContextContributors,
-                trustedBusinessContext
+                trustedBusinessContext,
+                untrustedEvidence
         );
     }
 
@@ -197,7 +231,8 @@ public record AgentExecutionRequest(
                 contextSnapshotId,
                 cancellationContext,
                 runtimeContextContributors,
-                trustedBusinessContext
+                trustedBusinessContext,
+                untrustedEvidence
         );
     }
 
@@ -210,7 +245,22 @@ public record AgentExecutionRequest(
                 contextSnapshotId,
                 cancellationContext,
                 runtimeContextContributors,
-                messages
+                messages,
+                untrustedEvidence
+        );
+    }
+
+    public AgentExecutionRequest withUntrustedEvidence(List<UntrustedEvidence> evidence) {
+        return new AgentExecutionRequest(
+                runSpec,
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                contextSnapshotId,
+                cancellationContext,
+                runtimeContextContributors,
+                trustedBusinessContext,
+                evidence
         );
     }
 

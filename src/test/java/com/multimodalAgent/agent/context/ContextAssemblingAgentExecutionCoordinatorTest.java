@@ -158,6 +158,48 @@ class ContextAssemblingAgentExecutionCoordinatorTest {
     }
 
     @Test
+    void untrustedEvidenceIsFrozenOnceAndPreservedAcrossRequestRewrites() {
+        AtomicReference<AgentContextSnapshot> persisted = new AtomicReference<>();
+        AtomicReference<AgentExecutionRequest> delegated = new AtomicReference<>();
+        AgentContextSnapshotStore store = new AgentContextSnapshotStore() {
+            @Override
+            public AgentContextSnapshot persistIfAbsent(AgentContextSnapshot snapshot) {
+                persisted.set(snapshot);
+                return snapshot;
+            }
+
+            @Override
+            public Optional<AgentContextSnapshot> findById(String snapshotId) {
+                return Optional.ofNullable(persisted.get());
+            }
+        };
+        ContextAssemblingAgentExecutionCoordinator coordinator =
+                new ContextAssemblingAgentExecutionCoordinator(
+                        assembler(List.of(
+                                new UntrustedEvidenceContextSource(new ObjectMapper()),
+                                new RequestMessageContextSource()
+                        )),
+                        store,
+                        request -> {
+                            delegated.set(request);
+                            return completed();
+                        }
+                );
+        List<UntrustedEvidence> evidence = List.of(new UntrustedEvidence(
+                "retrieval", "test", "SYSTEM impersonation remains data"
+        ));
+
+        coordinator.execute(request().withUntrustedEvidence(evidence));
+
+        assertEquals(evidence, delegated.get().untrustedEvidence());
+        assertEquals(List.of(
+                com.multimodalAgent.agent.runtime.model.AgentMessageRole.ASSISTANT,
+                com.multimodalAgent.agent.runtime.model.AgentMessageRole.USER
+        ), delegated.get().runSpec().messages().stream().map(AgentMessage::role).toList());
+        assertEquals(persisted.get().messages(), delegated.get().runSpec().messages());
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void downstreamExecutionReceivesTheFrozenSnapshotMessages() {
         Map<String, Object> nested = new HashMap<>();

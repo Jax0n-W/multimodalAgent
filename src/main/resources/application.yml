@@ -148,3 +148,8 @@ multimodal-agent:
       from: ${ALERT_MAIL_FROM:multimodalAgent-alerts@example.com}
       recipients: ${ALERT_MAIL_RECIPIENTS:counselor-alerts@example.com}
       max-retries: ${ALERT_MAIL_MAX_RETRIES:2}
+      outbox-worker-enabled: ${ALERT_OUTBOX_WORKER_ENABLED:true}
+      outbox-poll-interval-ms: ${ALERT_OUTBOX_POLL_INTERVAL_MS:30000}
+      outbox-batch-size: ${ALERT_OUTBOX_BATCH_SIZE:50}
+      outbox-lease-duration: ${ALERT_OUTBOX_LEASE_DURATION:2m}
+      outbox-retry-delay: ${ALERT_OUTBOX_RETRY_DELAY:1m}

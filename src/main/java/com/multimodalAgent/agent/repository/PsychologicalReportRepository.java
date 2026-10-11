@@ -3,6 +3,7 @@ package com.multimodalAgent.agent.repository;
 import com.multimodalAgent.agent.domain.PsychologicalReport;
 import com.multimodalAgent.agent.domain.ToolStatus;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -10,6 +11,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * 心理报告的数据访问接口。
  */
 public interface PsychologicalReportRepository extends JpaRepository<PsychologicalReport, Long> {
+
+    @EntityGraph(attributePaths = {"user", "session"})
+    Optional<PsychologicalReport> findWithUserById(Long id);
 
     /** 当前用户自己的报告查询，主要保留给接口扩展。 */
     @EntityGraph(attributePaths = {"user", "session"})

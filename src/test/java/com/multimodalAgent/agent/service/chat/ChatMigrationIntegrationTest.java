@@ -16,13 +16,15 @@ import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
 import com.multimodalAgent.agent.persistence.repository.ChatHistoryProjectionRepository;
 import com.multimodalAgent.agent.persistence.repository.ChatRuntimeSessionRepository;
 import com.multimodalAgent.agent.repository.ChatMessageRepository;
+import com.multimodalAgent.agent.repository.HighRiskNotificationIntentRepository;
 import com.multimodalAgent.agent.repository.PsychologicalReportRepository;
 import com.multimodalAgent.agent.repository.UserAccountRepository;
 import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.service.ChatService;
 import com.multimodalAgent.agent.service.PsychologyAssessment;
-import com.multimodalAgent.agent.service.ToolOrchestrationService;
 import com.multimodalAgent.agent.service.ai.AiClient;
+import com.multimodalAgent.agent.service.mcp.AlertNotifier;
+import com.multimodalAgent.agent.service.mcp.ExcelReportWriter;
 import com.multimodalAgent.agent.service.multimodal.MultimodalAnalysis;
 import com.multimodalAgent.agent.service.multimodal.MultimodalSignal;
 import org.junit.jupiter.api.Test;
@@ -59,7 +61,8 @@ import static org.mockito.Mockito.when;
         "multimodal-agent.runtime.chat-migration.enabled=true",
         "multimodal-agent.runtime.memory.enabled=true",
         "multimodal-agent.runtime.skills.enabled=true",
-        "multimodal-agent.knowledge.use-chroma=false"
+        "multimodal-agent.knowledge.use-chroma=false",
+        "multimodal-agent.mcp.email.outbox-worker-enabled=false"
 })
 @AutoConfigureWebTestClient
 class ChatMigrationIntegrationTest {
@@ -72,6 +75,7 @@ class ChatMigrationIntegrationTest {
     @Autowired private ChatHistoryProjectionRepository projections;
     @Autowired private ChatMessageRepository chatMessages;
     @Autowired private PsychologicalReportRepository reports;
+    @Autowired private HighRiskNotificationIntentRepository notificationIntents;
     @Autowired private UserAccountRepository users;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private ObjectMapper objectMapper;
@@ -79,7 +83,8 @@ class ChatMigrationIntegrationTest {
 
     @MockBean private OpenAiCompatibleStreamingClient provider;
     @MockBean private AiClient legacyAiClient;
-    @MockBean private ToolOrchestrationService toolOrchestrationService;
+    @MockBean private AlertNotifier alertNotifier;
+    @MockBean private ExcelReportWriter excelReportWriter;
 
     @Test
     void studentHttpEntryUsesFullRuntimeAndSecondTurnUsesDurableMemory() throws Exception {
@@ -107,7 +112,7 @@ class ChatMigrationIntegrationTest {
                 sessionRuns.get(0).getContextSnapshotId()
         ).orElseThrow().getContextJson());
         assertEquals(List.of(
-                "agent-skills", "chat-business-context",
+                "agent-skills", "chat-business-context", "chat-untrusted-evidence",
                 "conversation-memory", "request-messages"
         ), java.util.stream.StreamSupport.stream(
                         context.path("contributions").spliterator(), false)
@@ -162,7 +167,7 @@ class ChatMigrationIntegrationTest {
                 .filter(value -> value.getSession().getPublicId().equals(sessionId))
                 .findFirst().orElseThrow();
         assertEquals(RiskLevel.HIGH, report.getRiskLevel());
-        verify(toolOrchestrationService).handleAsync(report.getId());
+        assertEquals(1, notificationIntents.findByReportId(report.getId()).size());
         assertEquals(List.of(MessageRole.USER),
                 chatMessages.findBySession_PublicIdOrderByCreatedAtAsc(sessionId).stream()
                         .map(value -> value.getRole()).toList());
@@ -201,9 +206,16 @@ class ChatMigrationIntegrationTest {
             AgentRunEntity run = runs.findBySessionIdOrderByCreatedAtDesc(sessionId).get(0);
             String json = snapshots.findById(run.getContextSnapshotId())
                     .orElseThrow().getContextJson();
-            assertTrue(json.contains("Trusted Multimodal Context"));
+            assertTrue(json.contains("UNTRUSTED_EVIDENCE_DATA_V1"));
+            assertFalse(json.contains("Trusted Multimodal Context"));
             assertFalse(json.contains("13800138000"));
             assertFalse(json.contains("fusedScore"));
+            JsonNode snapshot = objectMapper.readTree(json);
+            assertFalse(java.util.stream.StreamSupport.stream(
+                            snapshot.path("messages").spliterator(), false)
+                    .filter(node -> "SYSTEM".equals(node.path("role").asText()))
+                    .anyMatch(node -> node.path("content").asText()
+                            .contains("MediaPipe detected")));
         }
         verify(legacyAiClient, never()).stream(any());
     }

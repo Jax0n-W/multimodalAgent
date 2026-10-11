@@ -2,132 +2,173 @@ package com.multimodalAgent.agent.service;
 
 import com.multimodalAgent.agent.config.multimodalAgentProperties;
 import com.multimodalAgent.agent.domain.AlertRecord;
+import com.multimodalAgent.agent.domain.HighRiskNotificationIntent;
+import com.multimodalAgent.agent.domain.HighRiskNotificationStatus;
 import com.multimodalAgent.agent.domain.PsychologicalReport;
 import com.multimodalAgent.agent.domain.RiskLevel;
 import com.multimodalAgent.agent.domain.ToolStatus;
 import com.multimodalAgent.agent.repository.AlertRecordRepository;
+import com.multimodalAgent.agent.repository.HighRiskNotificationIntentRepository;
 import com.multimodalAgent.agent.repository.PsychologicalReportRepository;
-import com.multimodalAgent.agent.service.mcp.AlertNotifier;
 import com.multimodalAgent.agent.service.mcp.ExcelReportWriter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.HexFormat;
+import java.util.List;
+
 @Service
-/**
- * 后台工具编排服务。
- *
- * <p>心理报告生成后独立记录 Excel 与高风险预警结果，避免报表故障阻断安全通知。</p>
- */
 public class ToolOrchestrationService {
+    static final String NO_RECIPIENT = "__NO_RECIPIENT_CONFIGURED__";
 
     private final ExcelReportWriter excelReportWriter;
-    private final AlertNotifier alertNotifier;
-    private final PsychologicalReportRepository reportRepository;
-    private final AlertRecordRepository alertRecordRepository;
+    private final PsychologicalReportRepository reports;
+    private final AlertRecordRepository alerts;
+    private final HighRiskNotificationIntentRepository intents;
     private final multimodalAgentProperties properties;
-    private final TaskExecutor mcpTaskExecutor;
-    private final TransactionTemplate transactionTemplate;
+    private final TaskExecutor executor;
+    private final TransactionTemplate transactions;
+    private final HighRiskNotificationDispatcher dispatcher;
 
     public ToolOrchestrationService(
             ExcelReportWriter excelReportWriter,
-            AlertNotifier alertNotifier,
-            PsychologicalReportRepository reportRepository,
-            AlertRecordRepository alertRecordRepository,
+            PsychologicalReportRepository reports,
+            AlertRecordRepository alerts,
+            HighRiskNotificationIntentRepository intents,
             multimodalAgentProperties properties,
-            @Qualifier("mcpTaskExecutor")
-            TaskExecutor mcpTaskExecutor,
-            TransactionTemplate transactionTemplate
+            @Qualifier("mcpTaskExecutor") TaskExecutor executor,
+            TransactionTemplate transactions,
+            HighRiskNotificationDispatcher dispatcher
     ) {
         this.excelReportWriter = excelReportWriter;
-        this.alertNotifier = alertNotifier;
-        this.reportRepository = reportRepository;
-        this.alertRecordRepository = alertRecordRepository;
+        this.reports = reports;
+        this.alerts = alerts;
+        this.intents = intents;
         this.properties = properties;
-        this.mcpTaskExecutor = mcpTaskExecutor;
-        this.transactionTemplate = transactionTemplate;
+        this.executor = executor;
+        this.transactions = transactions;
+        this.dispatcher = dispatcher;
+    }
+
+    /** Persists the report and its complete high-risk notification intent set atomically. */
+    @Transactional
+    public PsychologicalReport persistReportWithNotificationIntents(PsychologicalReport report) {
+        PsychologicalReport saved = reports.save(report);
+        if (saved.getRiskLevel() == RiskLevel.HIGH) {
+            createNotificationIntents(saved);
+        }
+        afterCommit(() -> handleAsync(saved.getId()));
+        return saved;
     }
 
     public void handleAsync(Long reportId) {
-        mcpTaskExecutor.execute(() -> {
-            try {
-                transactionTemplate.executeWithoutResult(status -> handleInTransaction(reportId));
-            } catch (Exception ignored) {
-                // 工具执行失败会写入报告状态，这里吞掉异常，避免后台任务影响聊天主流程。
-            }
-        });
+        executor.execute(() -> writeExcelTransaction(reportId));
+        dispatcher.dispatchAsync();
     }
 
-    @Transactional
     public void handle(Long reportId) {
-        handleInTransaction(reportId);
+        writeExcelTransaction(reportId);
+        dispatcher.drainOnce();
     }
 
-    private void handleInTransaction(Long reportId) {
-        PsychologicalReport managedReport = reportRepository.findById(reportId)
-                .orElseThrow(() -> new IllegalArgumentException("Report not found: " + reportId));
-        writeExcel(managedReport);
-        // Excel is reporting infrastructure, not proof that a human received a crisis alert.
-        if (managedReport.getRiskLevel() == RiskLevel.HIGH) {
-            sendAlerts(managedReport);
-        }
-        reportRepository.save(managedReport);
-    }
-
-    private void writeExcel(PsychologicalReport report) {
-        try {
-            excelReportWriter.write(report);
-            report.setExcelStatus(ToolStatus.SUCCESS);
-        } catch (Exception exception) {
-            report.setExcelStatus(ToolStatus.FAILED);
-            report.setToolError(shorten(exception.getMessage()));
-        }
-    }
-
-    private void sendAlerts(PsychologicalReport report) {
-        if (properties.getMcp().getEmail().getRecipients().isEmpty()) {
+    private void createNotificationIntents(PsychologicalReport report) {
+        List<String> recipients = properties.getMcp().getEmail().getRecipients().stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .distinct()
+                .sorted()
+                .toList();
+        int maxAttempts = Math.max(1, properties.getMcp().getEmail().getMaxRetries() + 1);
+        if (recipients.isEmpty()) {
             report.setEmailStatus(ToolStatus.FAILED);
             report.setToolError(appendError(report.getToolError(), "No alert recipient configured"));
+            intents.save(intent(report.getId(), null, NO_RECIPIENT,
+                    HighRiskNotificationStatus.PERMANENT_FAILURE, maxAttempts,
+                    "No alert recipient configured"));
             return;
         }
-        boolean allSuccess = true;
-        for (String recipient : properties.getMcp().getEmail().getRecipients()) {
-            AlertRecord alertRecord = new AlertRecord();
-            alertRecord.setReport(report);
-            alertRecord.setRecipient(recipient);
-            alertRecordRepository.save(alertRecord);
-
-            boolean sent = false;
-            int maxAttempts = Math.max(1, properties.getMcp().getEmail().getMaxRetries() + 1);
-            // 每个收件人独立重试和落库，管理员后台可以看到每封通知的最终状态。
-            for (int attempt = 0; attempt < maxAttempts && !sent; attempt++) {
-                try {
-                    alertRecord.incrementAttempts();
-                    alertNotifier.notify(alertRecord, report);
-                    alertRecord.setStatus(ToolStatus.SUCCESS);
-                    sent = true;
-                } catch (Exception exception) {
-                    alertRecord.setStatus(ToolStatus.FAILED);
-                    alertRecord.setErrorMessage(shorten(exception.getMessage()));
-                }
-            }
-            alertRecordRepository.save(alertRecord);
-            allSuccess = allSuccess && sent;
+        report.setEmailStatus(ToolStatus.PENDING);
+        for (String recipient : recipients) {
+            AlertRecord alert = new AlertRecord();
+            alert.setReport(report);
+            alert.setRecipient(recipient);
+            alert = alerts.save(alert);
+            intents.save(intent(report.getId(), alert.getId(), recipient,
+                    HighRiskNotificationStatus.PENDING, maxAttempts, null));
         }
-        report.setEmailStatus(allSuccess ? ToolStatus.SUCCESS : ToolStatus.FAILED);
+    }
+
+    private HighRiskNotificationIntent intent(
+            Long reportId, Long alertId, String recipient,
+            HighRiskNotificationStatus status, int maxAttempts, String failure
+    ) {
+        Instant now = Instant.now();
+        HighRiskNotificationIntent intent = new HighRiskNotificationIntent();
+        intent.setNotificationId("hrn-" + reportId + "-" + digest(recipient));
+        intent.setReportId(reportId);
+        intent.setAlertRecordId(alertId);
+        intent.setRecipient(recipient);
+        intent.setStatus(status);
+        intent.setAttemptCount(0);
+        intent.setMaxAttempts(maxAttempts);
+        intent.setNextAttemptAt(now);
+        intent.setLastFailureReason(failure);
+        intent.setCreatedAt(now);
+        intent.setUpdatedAt(now);
+        return intent;
+    }
+
+    private void writeExcelTransaction(Long reportId) {
+        try {
+            transactions.executeWithoutResult(ignored -> {
+                PsychologicalReport report = reports.findById(reportId)
+                        .orElseThrow(() -> new IllegalArgumentException("Report not found: " + reportId));
+                try {
+                    excelReportWriter.write(report);
+                    report.setExcelStatus(ToolStatus.SUCCESS);
+                } catch (RuntimeException failure) {
+                    report.setExcelStatus(ToolStatus.FAILED);
+                    report.setToolError(appendError(report.getToolError(), failure.getMessage()));
+                }
+            });
+        } catch (RuntimeException ignored) {
+            // Notification dispatch is independent and was kicked separately.
+        }
+    }
+
+    private void afterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() { action.run(); }
+            });
+        } else {
+            action.run();
+        }
+    }
+
+    private String digest(String value) {
+        try {
+            byte[] bytes = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(bytes).substring(0, 24);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
     }
 
     private String appendError(String current, String next) {
-        String combined = current == null || current.isBlank() ? next : current + "; " + next;
-        return shorten(combined);
-    }
-
-    private String shorten(String message) {
-        if (message == null) {
-            return "";
-        }
-        return message.length() > 500 ? message.substring(0, 500) : message;
+        String safeNext = next == null ? "Tool execution failed" : next;
+        String combined = current == null || current.isBlank() ? safeNext : current + "; " + safeNext;
+        return combined.length() > 500 ? combined.substring(0, 500) : combined;
     }
 }

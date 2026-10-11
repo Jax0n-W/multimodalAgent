@@ -614,6 +614,10 @@ public class multimodalAgentProperties {
         private String from = "multimodalAgent@example.com";
         private List<String> recipients = new ArrayList<>(List.of("counselor@example.com"));
         private int maxRetries = 2;
+        private boolean outboxWorkerEnabled = true;
+        private int outboxBatchSize = 50;
+        private Duration outboxLeaseDuration = Duration.ofMinutes(2);
+        private Duration outboxRetryDelay = Duration.ofMinutes(1);
 
         public String getMode() {
             return mode;
@@ -654,5 +658,14 @@ public class multimodalAgentProperties {
         public void setMaxRetries(int maxRetries) {
             this.maxRetries = maxRetries;
         }
+
+        public boolean isOutboxWorkerEnabled() { return outboxWorkerEnabled; }
+        public void setOutboxWorkerEnabled(boolean value) { this.outboxWorkerEnabled = value; }
+        public int getOutboxBatchSize() { return Math.max(1, outboxBatchSize); }
+        public void setOutboxBatchSize(int value) { this.outboxBatchSize = value; }
+        public Duration getOutboxLeaseDuration() { return outboxLeaseDuration; }
+        public void setOutboxLeaseDuration(Duration value) { this.outboxLeaseDuration = value; }
+        public Duration getOutboxRetryDelay() { return outboxRetryDelay; }
+        public void setOutboxRetryDelay(Duration value) { this.outboxRetryDelay = value; }
     }
 }

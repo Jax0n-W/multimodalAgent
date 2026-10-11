@@ -15,7 +15,8 @@ public record ContextAssemblyInput(
         Long userId,
         List<AgentMessage> requestMessages,
         Set<String> allowedTools,
-        List<AgentMessage> trustedBusinessContext
+        List<AgentMessage> trustedBusinessContext,
+        List<UntrustedEvidence> untrustedEvidence
 ) {
 
     public ContextAssemblyInput {
@@ -55,6 +56,28 @@ public record ContextAssemblyInput(
                 );
             }
         }
+        untrustedEvidence = List.copyOf(Objects.requireNonNull(
+                untrustedEvidence,
+                "untrustedEvidence must not be null"
+        ));
+        untrustedEvidence.forEach(evidence -> Objects.requireNonNull(
+                evidence,
+                "untrustedEvidence must not contain null"
+        ));
+    }
+
+    public ContextAssemblyInput(
+            String runId,
+            String sessionId,
+            Long userId,
+            List<AgentMessage> requestMessages,
+            Set<String> allowedTools,
+            List<AgentMessage> trustedBusinessContext
+    ) {
+        this(
+                runId, sessionId, userId, requestMessages, allowedTools,
+                trustedBusinessContext, List.of()
+        );
     }
 
     public ContextAssemblyInput(
@@ -64,7 +87,7 @@ public record ContextAssemblyInput(
             List<AgentMessage> requestMessages,
             Set<String> allowedTools
     ) {
-        this(runId, sessionId, userId, requestMessages, allowedTools, List.of());
+        this(runId, sessionId, userId, requestMessages, allowedTools, List.of(), List.of());
     }
 
     public ContextAssemblyInput(
@@ -73,7 +96,7 @@ public record ContextAssemblyInput(
             Long userId,
             List<AgentMessage> requestMessages
     ) {
-        this(runId, sessionId, userId, requestMessages, Set.of(), List.of());
+        this(runId, sessionId, userId, requestMessages, Set.of(), List.of(), List.of());
     }
 
     private static void requireText(String value, String field) {

@@ -3,6 +3,9 @@ package com.multimodalAgent.agent.persistence;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.output.MigrateResult;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -10,13 +13,20 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Testcontainers(disabledWithoutDocker = true)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class AgentRuntimeMySqlMigrationTest {
 
     @Container
@@ -24,6 +34,7 @@ class AgentRuntimeMySqlMigrationTest {
             .withDatabaseName("agent_runtime_test");
 
     @Test
+    @Order(1)
     void shouldMigrateAnEmptyMySqlDatabase() throws Exception {
         MigrateResult result = Flyway.configure()
                 .dataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword())
@@ -31,7 +42,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(10, result.migrationsExecuted);
+        assertEquals(11, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -48,13 +59,14 @@ class AgentRuntimeMySqlMigrationTest {
                            'tool_execution_outcomes',
                            'agent_context_snapshots',
                            'chat_runtime_sessions',
-                           'chat_history_projections'
+                           'chat_history_projections',
+                           'high_risk_notification_intents'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(10, resultSet.getInt(1));
+                assertEquals(11, resultSet.getInt(1));
             }
         }
 
@@ -103,6 +115,11 @@ class AgentRuntimeMySqlMigrationTest {
                     "run_id", "session_id", "user_id", "status", "chat_message_id",
                     "error_message", "created_at", "updated_at"
             ));
+            assertColumns(connection, "high_risk_notification_intents", List.of(
+                    "notification_id", "report_id", "alert_record_id", "recipient", "status",
+                    "attempt_count", "max_attempts", "next_attempt_at", "lease_owner",
+                    "lease_expires_at", "last_failure_reason", "created_at", "updated_at", "version"
+            ));
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
             assertUniqueIndex(connection, "agent_steps", "uk_agent_steps_run_step_index",
@@ -122,6 +139,12 @@ class AgentRuntimeMySqlMigrationTest {
                     "runtime_config_snapshot_id",
                     "agent_runtime_config_snapshots",
                     "snapshot_id"
+            );
+            assertUniqueIndex(
+                    connection,
+                    "high_risk_notification_intents",
+                    "uk_high_risk_notification_report_recipient",
+                    List.of("report_id", "recipient")
             );
             assertForeignKey(
                     connection,
@@ -189,6 +212,68 @@ class AgentRuntimeMySqlMigrationTest {
                     "agent_context_snapshots",
                     "snapshot_id"
             );
+        }
+    }
+
+    @Test
+    @Order(2)
+    void notificationOutboxHasMySqlUniquenessAndAtomicClaimSemantics() throws Exception {
+        Flyway.configure()
+                .dataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword())
+                .locations("classpath:db/migration")
+                .load()
+                .migrate();
+        try (Connection connection = MYSQL.createConnection("");
+             PreparedStatement clear = connection.prepareStatement(
+                     "DELETE FROM high_risk_notification_intents")) {
+            clear.executeUpdate();
+        }
+        insertNotification("mysql-claim", 991L, "counselor@example.com");
+
+        CompletableFuture<Integer> first = CompletableFuture.supplyAsync(
+                () -> claimNotification("mysql-claim", "worker-a"));
+        CompletableFuture<Integer> second = CompletableFuture.supplyAsync(
+                () -> claimNotification("mysql-claim", "worker-b"));
+        CompletableFuture.allOf(first, second).get(10, TimeUnit.SECONDS);
+
+        assertEquals(1, first.get() + second.get());
+        assertThrows(SQLException.class,
+                () -> insertNotification("mysql-duplicate", 991L, "counselor@example.com"));
+    }
+
+    private void insertNotification(String id, long reportId, String recipient) throws SQLException {
+        try (Connection connection = MYSQL.createConnection("");
+             PreparedStatement statement = connection.prepareStatement("""
+                     INSERT INTO high_risk_notification_intents (
+                         notification_id, report_id, recipient, status, attempt_count,
+                         max_attempts, next_attempt_at, created_at, updated_at, version
+                     ) VALUES (?, ?, ?, 'PENDING', 0, 3, ?, ?, ?, 0)
+                     """)) {
+            Timestamp now = Timestamp.from(Instant.now());
+            statement.setString(1, id);
+            statement.setLong(2, reportId);
+            statement.setString(3, recipient);
+            statement.setTimestamp(4, now);
+            statement.setTimestamp(5, now);
+            statement.setTimestamp(6, now);
+            statement.executeUpdate();
+        }
+    }
+
+    private int claimNotification(String id, String owner) {
+        try (Connection connection = MYSQL.createConnection("");
+             PreparedStatement statement = connection.prepareStatement("""
+                     UPDATE high_risk_notification_intents
+                     SET status = 'CLAIMED', lease_owner = ?,
+                         lease_expires_at = ?, attempt_count = attempt_count + 1
+                     WHERE notification_id = ? AND status = 'PENDING'
+                     """)) {
+            statement.setString(1, owner);
+            statement.setTimestamp(2, Timestamp.from(Instant.now().plusSeconds(60)));
+            statement.setString(3, id);
+            return statement.executeUpdate();
+        } catch (SQLException exception) {
+            throw new IllegalStateException(exception);
         }
     }
 
