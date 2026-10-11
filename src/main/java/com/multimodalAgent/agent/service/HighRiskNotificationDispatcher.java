@@ -62,10 +62,16 @@ public class HighRiskNotificationDispatcher {
             externalCallReturned = true;
             store.delivered(claim, Instant.now());
         } catch (DefinitelyNotDeliveredException failure) {
-            store.definitelyNotDelivered(
-                    claim, failure.getMessage(), Instant.now(),
-                    properties.getMcp().getEmail().getOutboxRetryDelay()
-            );
+            try {
+                store.definitelyNotDelivered(
+                        claim, failure.getMessage(), Instant.now(),
+                        properties.getMcp().getEmail().getOutboxRetryDelay()
+                );
+            } catch (RuntimeException stateFailure) {
+                // A later claim generation may already own the row. Never let this stale
+                // execution classify or otherwise mutate the current delivery attempt.
+                failure.addSuppressed(stateFailure);
+            }
         } catch (RuntimeException failure) {
             String reason = externalCallReturned
                     ? "Delivery returned successfully but durable completion failed"

@@ -30,7 +30,7 @@ class HighRiskNotificationDispatcherTest {
         AlertNotifier notifier = mock(AlertNotifier.class);
         multimodalAgentProperties properties = new multimodalAgentProperties();
         ClaimedNotification claim = new ClaimedNotification(
-                "notification", 3L, 4L, "counselor@example.com", 1, 3, "owner"
+                "notification", 3L, 4L, "counselor@example.com", 1, 3, "owner", "token"
         );
         when(store.dueIds(any(), any(Integer.class))).thenReturn(List.of("notification"));
         when(store.claim(eq("notification"), any(), any(), any()))

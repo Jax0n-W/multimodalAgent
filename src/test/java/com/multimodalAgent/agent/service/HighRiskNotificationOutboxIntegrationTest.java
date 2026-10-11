@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -139,6 +140,7 @@ class HighRiskNotificationOutboxIntegrationTest {
         HighRiskNotificationIntent intent = pendingIntent(3);
         intent.setStatus(HighRiskNotificationStatus.PROCESSING);
         intent.setLeaseOwner("dead-worker");
+        intent.setClaimToken("expired-processing-token");
         intent.setLeaseExpiresAt(Instant.now().minusSeconds(5));
         intents.save(intent);
 
@@ -155,6 +157,7 @@ class HighRiskNotificationOutboxIntegrationTest {
         intent.setStatus(HighRiskNotificationStatus.CLAIMED);
         intent.setAttemptCount(1);
         intent.setLeaseOwner("dead-worker");
+        intent.setClaimToken("expired-token");
         intent.setLeaseExpiresAt(Instant.now().minusSeconds(5));
         intents.save(intent);
 
@@ -165,6 +168,49 @@ class HighRiskNotificationOutboxIntegrationTest {
         assertEquals(HighRiskNotificationStatus.FAILED_RETRYABLE, stored.getStatus());
         assertEquals(1, stored.getAttemptCount());
         verifyNoInteractions(notifier);
+    }
+
+    @Test
+    void staleClaimCannotMutateReclaimedAttemptWithSameOwner() {
+        HighRiskNotificationIntent intent = pendingIntent(3);
+        String stableOwner = "same-dispatcher";
+        Instant firstClaimedAt = Instant.now();
+        var staleClaim = stateStore.claim(
+                intent.getNotificationId(), stableOwner, firstClaimedAt, Duration.ofSeconds(30)
+        ).orElseThrow();
+
+        HighRiskNotificationIntent expired = intents.findById(intent.getNotificationId())
+                .orElseThrow();
+        expired.setLeaseExpiresAt(firstClaimedAt.minusMillis(1));
+        intents.saveAndFlush(expired);
+        stateStore.quarantineExpiredLeases(firstClaimedAt);
+
+        var currentClaim = stateStore.claim(
+                intent.getNotificationId(), stableOwner, firstClaimedAt.plusSeconds(1),
+                Duration.ofMinutes(1)
+        ).orElseThrow();
+        assertNotEquals(staleClaim.claimToken(), currentClaim.claimToken());
+
+        assertThrows(IllegalStateException.class,
+                () -> stateStore.beginDelivery(staleClaim, firstClaimedAt.plusSeconds(2)));
+        stateStore.beginDelivery(currentClaim, firstClaimedAt.plusSeconds(2));
+        assertThrows(IllegalStateException.class,
+                () -> stateStore.delivered(staleClaim, firstClaimedAt.plusSeconds(3)));
+        assertThrows(IllegalStateException.class,
+                () -> stateStore.uncertain(
+                        staleClaim, "stale attempt", firstClaimedAt.plusSeconds(3)));
+        assertThrows(IllegalStateException.class,
+                () -> stateStore.definitelyNotDelivered(
+                        staleClaim, "stale attempt", firstClaimedAt.plusSeconds(3), Duration.ZERO));
+
+        HighRiskNotificationIntent processing = intents.findById(intent.getNotificationId())
+                .orElseThrow();
+        assertEquals(HighRiskNotificationStatus.PROCESSING, processing.getStatus());
+        assertEquals(currentClaim.claimToken(), processing.getClaimToken());
+
+        stateStore.delivered(currentClaim, firstClaimedAt.plusSeconds(4));
+        assertEquals(HighRiskNotificationStatus.DELIVERED,
+                intents.findById(intent.getNotificationId()).orElseThrow().getStatus());
     }
 
     @Test

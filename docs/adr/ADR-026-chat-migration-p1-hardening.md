@@ -38,7 +38,10 @@ successful. Dispatch is kicked only after commit; startup and scheduled scans re
 kicks.
 
 Workers claim due intents with a conditional database update into `CLAIMED`. A successful claim
-increments the durable attempt count. Before invoking the external notifier, the worker durably
+increments the durable attempt count and receives a unique claim token. Every claim-owned state
+transition is a conditional database update over notification identity, status, owner, and claim
+token. The token fences an expired task from a later claim generation even when both generations
+belong to the same dispatcher instance. Before invoking the external notifier, the worker durably
 transitions to `PROCESSING`. An expired `CLAIMED` lease is safe to retry; an expired `PROCESSING`
 lease is ambiguous and becomes `UNCERTAIN`. Confirmed pre-send failures may transition to
 `FAILED_RETRYABLE` up to the configured limit. Ordinary transport failures or success followed

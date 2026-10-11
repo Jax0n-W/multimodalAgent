@@ -33,6 +33,8 @@ public class HighRiskNotificationIntent {
     private Instant nextAttemptAt;
     @Column(name = "lease_owner", length = 96)
     private String leaseOwner;
+    @Column(name = "claim_token", length = 64)
+    private String claimToken;
     @Column(name = "lease_expires_at")
     private Instant leaseExpiresAt;
     @Column(name = "last_failure_reason", length = 500)
@@ -62,6 +64,8 @@ public class HighRiskNotificationIntent {
     public void setNextAttemptAt(Instant nextAttemptAt) { this.nextAttemptAt = nextAttemptAt; }
     public String getLeaseOwner() { return leaseOwner; }
     public void setLeaseOwner(String leaseOwner) { this.leaseOwner = leaseOwner; }
+    public String getClaimToken() { return claimToken; }
+    public void setClaimToken(String claimToken) { this.claimToken = claimToken; }
     public Instant getLeaseExpiresAt() { return leaseExpiresAt; }
     public void setLeaseExpiresAt(Instant leaseExpiresAt) { this.leaseExpiresAt = leaseExpiresAt; }
     public String getLastFailureReason() { return lastFailureReason; }

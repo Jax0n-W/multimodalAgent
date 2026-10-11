@@ -42,7 +42,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(11, result.migrationsExecuted);
+        assertEquals(12, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -118,7 +118,8 @@ class AgentRuntimeMySqlMigrationTest {
             assertColumns(connection, "high_risk_notification_intents", List.of(
                     "notification_id", "report_id", "alert_record_id", "recipient", "status",
                     "attempt_count", "max_attempts", "next_attempt_at", "lease_owner",
-                    "lease_expires_at", "last_failure_reason", "created_at", "updated_at", "version"
+                    "claim_token", "lease_expires_at", "last_failure_reason", "created_at",
+                    "updated_at", "version"
             ));
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
@@ -231,14 +232,42 @@ class AgentRuntimeMySqlMigrationTest {
         insertNotification("mysql-claim", 991L, "counselor@example.com");
 
         CompletableFuture<Integer> first = CompletableFuture.supplyAsync(
-                () -> claimNotification("mysql-claim", "worker-a"));
+                () -> claimNotification("mysql-claim", "worker-a", "token-a"));
         CompletableFuture<Integer> second = CompletableFuture.supplyAsync(
-                () -> claimNotification("mysql-claim", "worker-b"));
+                () -> claimNotification("mysql-claim", "worker-b", "token-b"));
         CompletableFuture.allOf(first, second).get(10, TimeUnit.SECONDS);
 
         assertEquals(1, first.get() + second.get());
         assertThrows(SQLException.class,
                 () -> insertNotification("mysql-duplicate", 991L, "counselor@example.com"));
+    }
+
+    @Test
+    @Order(3)
+    void staleClaimTokenCannotCrossIntoReclaimedGenerationWithSameOwner() throws Exception {
+        try (Connection connection = MYSQL.createConnection("");
+             PreparedStatement clear = connection.prepareStatement(
+                     "DELETE FROM high_risk_notification_intents")) {
+            clear.executeUpdate();
+        }
+        insertNotification("mysql-fenced", 992L, "fenced@example.com");
+        assertEquals(1, claimNotification("mysql-fenced", "same-owner", "old-token"));
+        try (Connection connection = MYSQL.createConnection("");
+             PreparedStatement expire = connection.prepareStatement("""
+                     UPDATE high_risk_notification_intents
+                     SET status = 'FAILED_RETRYABLE', next_attempt_at = ?,
+                         lease_owner = NULL, lease_expires_at = NULL, claim_token = NULL
+                     WHERE notification_id = ? AND status = 'CLAIMED' AND claim_token = ?
+                     """)) {
+            expire.setTimestamp(1, Timestamp.from(Instant.now().minusSeconds(1)));
+            expire.setString(2, "mysql-fenced");
+            expire.setString(3, "old-token");
+            assertEquals(1, expire.executeUpdate());
+        }
+        assertEquals(1, claimNotification("mysql-fenced", "same-owner", "new-token"));
+
+        assertEquals(0, beginDelivery("mysql-fenced", "same-owner", "old-token"));
+        assertEquals(1, beginDelivery("mysql-fenced", "same-owner", "new-token"));
     }
 
     private void insertNotification(String id, long reportId, String recipient) throws SQLException {
@@ -260,20 +289,38 @@ class AgentRuntimeMySqlMigrationTest {
         }
     }
 
-    private int claimNotification(String id, String owner) {
+    private int claimNotification(String id, String owner, String claimToken) {
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
                      UPDATE high_risk_notification_intents
-                     SET status = 'CLAIMED', lease_owner = ?,
+                     SET status = 'CLAIMED', lease_owner = ?, claim_token = ?,
                          lease_expires_at = ?, attempt_count = attempt_count + 1
-                     WHERE notification_id = ? AND status = 'PENDING'
+                     WHERE notification_id = ? AND status IN ('PENDING', 'FAILED_RETRYABLE')
+                       AND next_attempt_at <= ?
                      """)) {
             statement.setString(1, owner);
-            statement.setTimestamp(2, Timestamp.from(Instant.now().plusSeconds(60)));
-            statement.setString(3, id);
+            statement.setString(2, claimToken);
+            statement.setTimestamp(3, Timestamp.from(Instant.now().plusSeconds(60)));
+            statement.setString(4, id);
+            statement.setTimestamp(5, Timestamp.from(Instant.now()));
             return statement.executeUpdate();
         } catch (SQLException exception) {
             throw new IllegalStateException(exception);
+        }
+    }
+
+    private int beginDelivery(String id, String owner, String claimToken) throws SQLException {
+        try (Connection connection = MYSQL.createConnection("");
+             PreparedStatement statement = connection.prepareStatement("""
+                     UPDATE high_risk_notification_intents
+                     SET status = 'PROCESSING'
+                     WHERE notification_id = ? AND status = 'CLAIMED'
+                       AND lease_owner = ? AND claim_token = ?
+                     """)) {
+            statement.setString(1, id);
+            statement.setString(2, owner);
+            statement.setString(3, claimToken);
+            return statement.executeUpdate();
         }
     }
 

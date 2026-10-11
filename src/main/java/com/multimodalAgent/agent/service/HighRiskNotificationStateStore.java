@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class HighRiskNotificationStateStore {
@@ -48,9 +49,10 @@ public class HighRiskNotificationStateStore {
     public Optional<ClaimedNotification> claim(
             String id, String owner, Instant now, Duration leaseDuration
     ) {
+        String claimToken = UUID.randomUUID().toString();
         int claimed = intents.claim(
                 id, CLAIMABLE, HighRiskNotificationStatus.CLAIMED,
-                owner, now, now.plus(leaseDuration)
+                owner, claimToken, now, now.plus(leaseDuration)
         );
         if (claimed != 1) {
             return Optional.empty();
@@ -58,22 +60,26 @@ public class HighRiskNotificationStateStore {
         HighRiskNotificationIntent intent = intents.findById(id).orElseThrow();
         return Optional.of(new ClaimedNotification(
                 intent.getNotificationId(), intent.getReportId(), intent.getAlertRecordId(),
-                intent.getRecipient(), intent.getAttemptCount(), intent.getMaxAttempts(), owner
+                intent.getRecipient(), intent.getAttemptCount(), intent.getMaxAttempts(), owner,
+                claimToken
         ));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void beginDelivery(ClaimedNotification claim, Instant now) {
-        HighRiskNotificationIntent intent = owned(claim, HighRiskNotificationStatus.CLAIMED);
-        intent.setStatus(HighRiskNotificationStatus.PROCESSING);
-        intent.setUpdatedAt(now);
+        requireClaimTransition(intents.beginDelivery(
+                claim.notificationId(), HighRiskNotificationStatus.CLAIMED,
+                HighRiskNotificationStatus.PROCESSING, claim.owner(), claim.claimToken(), now
+        ), claim);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void delivered(ClaimedNotification claim, Instant now) {
-        HighRiskNotificationIntent intent = ownedProcessing(claim);
-        intent.setStatus(HighRiskNotificationStatus.DELIVERED);
-        clearLease(intent, now);
+        requireClaimTransition(intents.markDelivered(
+                claim.notificationId(), HighRiskNotificationStatus.PROCESSING,
+                HighRiskNotificationStatus.DELIVERED, claim.owner(), claim.claimToken(), now
+        ), claim);
+        HighRiskNotificationIntent intent = intents.findById(claim.notificationId()).orElseThrow();
         updateAlert(intent, ToolStatus.SUCCESS, null);
         updateReportStatus(intent.getReportId());
     }
@@ -82,24 +88,27 @@ public class HighRiskNotificationStateStore {
     public void definitelyNotDelivered(
             ClaimedNotification claim, String reason, Instant now, Duration retryDelay
     ) {
-        HighRiskNotificationIntent intent = ownedProcessing(claim);
-        boolean exhausted = intent.getAttemptCount() >= intent.getMaxAttempts();
-        intent.setStatus(exhausted
+        boolean exhausted = claim.attemptCount() >= claim.maxAttempts();
+        HighRiskNotificationStatus target = exhausted
                 ? HighRiskNotificationStatus.PERMANENT_FAILURE
-                : HighRiskNotificationStatus.FAILED_RETRYABLE);
-        intent.setNextAttemptAt(now.plus(retryDelay));
-        intent.setLastFailureReason(shorten(reason));
-        clearLease(intent, now);
+                : HighRiskNotificationStatus.FAILED_RETRYABLE;
+        requireClaimTransition(intents.finishProcessing(
+                claim.notificationId(), HighRiskNotificationStatus.PROCESSING, target,
+                claim.owner(), claim.claimToken(), now.plus(retryDelay), shorten(reason), now
+        ), claim);
+        HighRiskNotificationIntent intent = intents.findById(claim.notificationId()).orElseThrow();
         updateAlert(intent, ToolStatus.FAILED, reason);
         updateReportStatus(intent.getReportId());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void uncertain(ClaimedNotification claim, String reason, Instant now) {
-        HighRiskNotificationIntent intent = ownedProcessing(claim);
-        intent.setStatus(HighRiskNotificationStatus.UNCERTAIN);
-        intent.setLastFailureReason(shorten(reason));
-        clearLease(intent, now);
+        requireClaimTransition(intents.finishProcessing(
+                claim.notificationId(), HighRiskNotificationStatus.PROCESSING,
+                HighRiskNotificationStatus.UNCERTAIN, claim.owner(), claim.claimToken(), now,
+                shorten(reason), now
+        ), claim);
+        HighRiskNotificationIntent intent = intents.findById(claim.notificationId()).orElseThrow();
         updateAlert(intent, ToolStatus.FAILED, "Delivery outcome uncertain: " + reason);
         updateReportStatus(intent.getReportId());
     }
@@ -112,26 +121,36 @@ public class HighRiskNotificationStateStore {
                 );
         for (HighRiskNotificationIntent intent : expiredClaims) {
             boolean exhausted = intent.getAttemptCount() >= intent.getMaxAttempts();
-            intent.setStatus(exhausted
+            HighRiskNotificationStatus target = exhausted
                     ? HighRiskNotificationStatus.PERMANENT_FAILURE
-                    : HighRiskNotificationStatus.FAILED_RETRYABLE);
-            intent.setNextAttemptAt(now);
-            intent.setLastFailureReason(
-                    "Worker lease expired before external delivery handoff"
+                    : HighRiskNotificationStatus.FAILED_RETRYABLE;
+            String reason = "Worker lease expired before external delivery handoff";
+            int transitioned = intents.quarantineClaimed(
+                    intent.getNotificationId(), HighRiskNotificationStatus.CLAIMED, target,
+                    intent.getClaimToken(), now, reason, now
             );
-            clearLease(intent, now);
-            updateAlert(intent, ToolStatus.FAILED, intent.getLastFailureReason());
-            updateReportStatus(intent.getReportId());
+            if (transitioned == 1) {
+                HighRiskNotificationIntent quarantined = intents.findById(
+                        intent.getNotificationId()).orElseThrow();
+                updateAlert(quarantined, ToolStatus.FAILED, reason);
+                updateReportStatus(quarantined.getReportId());
+            }
         }
         List<HighRiskNotificationIntent> expired = intents.findByStatusAndLeaseExpiresAtBefore(
                 HighRiskNotificationStatus.PROCESSING, now
         );
         for (HighRiskNotificationIntent intent : expired) {
-            intent.setStatus(HighRiskNotificationStatus.UNCERTAIN);
-            intent.setLastFailureReason("Delivery worker lease expired; external outcome is unknown");
-            clearLease(intent, now);
-            updateAlert(intent, ToolStatus.FAILED, intent.getLastFailureReason());
-            updateReportStatus(intent.getReportId());
+            String reason = "Delivery worker lease expired; external outcome is unknown";
+            int transitioned = intents.quarantineProcessing(
+                    intent.getNotificationId(), HighRiskNotificationStatus.PROCESSING,
+                    HighRiskNotificationStatus.UNCERTAIN, intent.getClaimToken(), reason, now
+            );
+            if (transitioned == 1) {
+                HighRiskNotificationIntent quarantined = intents.findById(
+                        intent.getNotificationId()).orElseThrow();
+                updateAlert(quarantined, ToolStatus.FAILED, reason);
+                updateReportStatus(quarantined.getReportId());
+            }
         }
         return expiredClaims.size() + expired.size();
     }
@@ -143,26 +162,11 @@ public class HighRiskNotificationStateStore {
         return new DeliveryMaterial(alert, report);
     }
 
-    private HighRiskNotificationIntent ownedProcessing(ClaimedNotification claim) {
-        return owned(claim, HighRiskNotificationStatus.PROCESSING);
-    }
-
-    private HighRiskNotificationIntent owned(
-            ClaimedNotification claim, HighRiskNotificationStatus expectedStatus
-    ) {
-        HighRiskNotificationIntent intent = intents.findById(claim.notificationId()).orElseThrow();
-        if (intent.getStatus() != expectedStatus
-                || !claim.owner().equals(intent.getLeaseOwner())) {
+    private void requireClaimTransition(int transitioned, ClaimedNotification claim) {
+        if (transitioned != 1) {
             throw new IllegalStateException("Notification claim is no longer owned: "
                     + claim.notificationId());
         }
-        return intent;
-    }
-
-    private void clearLease(HighRiskNotificationIntent intent, Instant now) {
-        intent.setLeaseOwner(null);
-        intent.setLeaseExpiresAt(null);
-        intent.setUpdatedAt(now);
     }
 
     private void updateAlert(HighRiskNotificationIntent intent, ToolStatus status, String error) {
@@ -207,7 +211,8 @@ public class HighRiskNotificationStateStore {
             String recipient,
             int attemptCount,
             int maxAttempts,
-            String owner
+            String owner,
+            String claimToken
     ) { }
 
     public record DeliveryMaterial(AlertRecord alert, PsychologicalReport report) { }
