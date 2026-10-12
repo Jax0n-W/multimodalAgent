@@ -32,7 +32,7 @@ public class ToolExecutionOutcomeEntity {
     private String toolName;
 
     @Lob
-    @Column(name = "result_payload", nullable = false, updatable = false)
+    @Column(name = "result_payload", nullable = false, updatable = false, columnDefinition = "LONGTEXT")
     private String resultPayload;
 
     @Column(name = "payload_hash", nullable = false, updatable = false, length = 64)

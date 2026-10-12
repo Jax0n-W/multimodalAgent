@@ -11,7 +11,7 @@ fi
 OLLAMA_BIN="${OLLAMA_BIN:-$DEFAULT_OLLAMA_BIN}"
 OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-multimodalAgent-qwen2.5-7b-ft:latest}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-mindbridge-qwen2.5-7b-ft:latest}"
 if [ -z "${JAVA_HOME:-}" ] && [ -d "$ROOT_DIR/.tools/amazon-corretto-17.jdk/Contents/Home" ]; then
   export JAVA_HOME="$ROOT_DIR/.tools/amazon-corretto-17.jdk/Contents/Home"
 fi
@@ -54,9 +54,10 @@ if ! curl -fsS "$OLLAMA_BASE_URL/api/tags" >/dev/null 2>&1; then
 fi
 
 if ! "$OLLAMA_BIN" list | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then
-  if [ "$OLLAMA_MODEL" = "multimodalAgent-qwen2.5-7b-ft:latest" ] && [ -f "$ROOT_DIR/models/multimodalAgent-qwen2.5-7b-ft/Modelfile" ]; then
-    echo "Creating multimodalAgent-qwen2.5-7b-ft:latest from models/multimodalAgent-qwen2.5-7b-ft/Modelfile ..."
-    "$OLLAMA_BIN" create multimodalAgent-qwen2.5-7b-ft:latest -f "$ROOT_DIR/models/multimodalAgent-qwen2.5-7b-ft/Modelfile"
+  if { [ "$OLLAMA_MODEL" = "mindbridge-qwen2.5-7b-ft:latest" ] || [ "$OLLAMA_MODEL" = "multimodalAgent-qwen2.5-7b-ft:latest" ]; } \
+      && [ -f "$ROOT_DIR/models/multimodalAgent-qwen2.5-7b-ft/Modelfile" ]; then
+    echo "Creating $OLLAMA_MODEL from models/multimodalAgent-qwen2.5-7b-ft/Modelfile ..."
+    "$OLLAMA_BIN" create "$OLLAMA_MODEL" -f "$ROOT_DIR/models/multimodalAgent-qwen2.5-7b-ft/Modelfile"
   else
     echo "Pulling $OLLAMA_MODEL ..."
     "$OLLAMA_BIN" pull "$OLLAMA_MODEL"
@@ -66,4 +67,13 @@ fi
 AI_PROVIDER=ollama \
 OLLAMA_BASE_URL="$OLLAMA_BASE_URL" \
 OLLAMA_MODEL="$OLLAMA_MODEL" \
+AGENT_RUNTIME_ENABLED="${AGENT_RUNTIME_ENABLED:-true}" \
+AGENT_CHAT_MIGRATION_ENABLED="${AGENT_CHAT_MIGRATION_ENABLED:-true}" \
+AGENT_MEMORY_ENABLED="${AGENT_MEMORY_ENABLED:-true}" \
+AGENT_SKILLS_ENABLED="${AGENT_SKILLS_ENABLED:-true}" \
+RAG_HYBRID_MVP_ENABLED="${RAG_HYBRID_MVP_ENABLED:-true}" \
+RAG_RETRIEVAL_MODE="${RAG_RETRIEVAL_MODE:-HYBRID_RRF}" \
+USE_CHROMA="${USE_CHROMA:-false}" \
+MCP_EXCEL_MODE="${MCP_EXCEL_MODE:-local}" \
+MCP_EMAIL_MODE="${MCP_EMAIL_MODE:-log}" \
   "$MAVEN_BIN" -Dmaven.repo.local=.m2/repository spring-boot:run

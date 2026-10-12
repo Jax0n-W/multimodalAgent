@@ -38,7 +38,7 @@ public class AgentRecoveryCheckpointEntity {
     private String boundary;
 
     @Lob
-    @Column(name = "state_json", nullable = false, updatable = false)
+    @Column(name = "state_json", nullable = false, updatable = false, columnDefinition = "LONGTEXT")
     private String stateJson;
 
     @Column(name = "runtime_config_snapshot_id", nullable = false, updatable = false, length = 96)

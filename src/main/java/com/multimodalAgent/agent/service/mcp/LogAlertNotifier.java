@@ -17,10 +17,8 @@ public class LogAlertNotifier implements AlertNotifier {
     @Override
     public void notify(AlertRecord alertRecord, PsychologicalReport report) {
         log.warn(
-                "High risk alert dry-run: recipient={}, reportId={}, user={}, summary={}",
-                alertRecord.getRecipient(),
+                "High risk alert dry-run completed: reportId={}, alertRecordId={}",
                 report.getId(),
-                report.getUser().getUsername(),
-                report.getSummary());
+                alertRecord.getId());
     }
 }

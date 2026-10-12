@@ -25,7 +25,7 @@ public class AgentRuntimeConfigSnapshotEntity {
     private String configHash;
 
     @Lob
-    @Column(name = "config_json", nullable = false, updatable = false)
+    @Column(name = "config_json", nullable = false, updatable = false, columnDefinition = "LONGTEXT")
     private String configJson;
 
     @Column(name = "created_at", nullable = false, updatable = false)

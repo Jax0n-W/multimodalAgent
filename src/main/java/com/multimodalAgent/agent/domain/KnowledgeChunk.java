@@ -28,11 +28,11 @@ public class KnowledgeChunk {
     @Column(nullable = false, columnDefinition = "integer default 0")
     private int sourceIndex;
 
-    @Lob
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
     @Lob
+    @Column(name = "embedding_json", columnDefinition = "LONGTEXT")
     private String embeddingJson;
 
     @Column(nullable = false, updatable = false)

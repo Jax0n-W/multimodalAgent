@@ -19,7 +19,7 @@ spring:
       timeout: ${REDIS_TIMEOUT:2s}
   h2:
     console:
-      enabled: true
+      enabled: ${H2_CONSOLE_ENABLED:false}
       path: /h2-console
   flyway:
     enabled: true

@@ -42,7 +42,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(12, result.migrationsExecuted);
+        assertEquals(14, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -60,13 +60,14 @@ class AgentRuntimeMySqlMigrationTest {
                            'agent_context_snapshots',
                            'chat_runtime_sessions',
                            'chat_history_projections',
-                           'high_risk_notification_intents'
+                           'high_risk_notification_intents',
+                           'knowledge_chunks'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(11, resultSet.getInt(1));
+                assertEquals(12, resultSet.getInt(1));
             }
         }
 
@@ -121,6 +122,14 @@ class AgentRuntimeMySqlMigrationTest {
                     "claim_token", "lease_expires_at", "last_failure_reason", "created_at",
                     "updated_at", "version"
             ));
+            assertColumns(connection, "knowledge_chunks", List.of(
+                    "id", "source", "source_index", "content", "embedding_json", "created_at"
+            ));
+            assertColumnType(connection, "knowledge_chunks", "content", "text");
+            assertColumnType(connection, "agent_runtime_config_snapshots", "config_json", "longtext");
+            assertColumnType(connection, "agent_recovery_checkpoints", "state_json", "longtext");
+            assertColumnType(connection, "tool_execution_outcomes", "result_payload", "longtext");
+            assertColumnType(connection, "agent_context_snapshots", "context_json", "longtext");
 
             assertUniqueIndex(connection, "agent_runs", "uk_agent_runs_request_id", List.of("request_id"));
             assertUniqueIndex(connection, "agent_steps", "uk_agent_steps_run_step_index",
@@ -369,6 +378,29 @@ class AgentRuntimeMySqlMigrationTest {
                 }
             }
             assertEquals(expectedColumns, actualColumns);
+        }
+    }
+
+    private void assertColumnType(
+            Connection connection,
+            String tableName,
+            String columnName,
+            String expectedType
+    ) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = ?
+                  AND table_name = ?
+                  AND column_name = ?
+                """)) {
+            statement.setString(1, MYSQL.getDatabaseName());
+            statement.setString(2, tableName);
+            statement.setString(3, columnName);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                assertTrue(resultSet.next());
+                assertEquals(expectedType, resultSet.getString("data_type"));
+            }
         }
     }
 

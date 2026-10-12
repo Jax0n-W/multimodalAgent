@@ -1,284 +1,235 @@
-# multimodalAgent Agent
+# multimodalAgent
 
-multimodalAgent 是一个校园心理健康智能体
+`multimodalAgent` is a Campus Mental Health Multimodal Agent implemented with Java and Spring Boot.
+It provides supportive campus information and a demonstrable durable Agent Runtime: authenticated
+chat, multimodal risk fusion, bounded conversation memory, deterministic Skills, Hybrid RAG,
+governed tools, immutable execution snapshots, crash recovery and a reliable high-risk notification
+Outbox.
 
-- 动态路由 RAG：先识别 `CHAT / CONSULT / RISK`，闲聊不查知识库，咨询与风险消息才进入检索增强。
-- SSE 流式输出：`/api/chat/stream` 返回 `text/event-stream`，适合前端做打字机效果。
-- 后台心理状态识别：记录情绪标签、情绪分数、风险等级和置信度，但学生端不展示评估结果。
-- 数据闭环：咨询/风险消息写入数据库，高风险先写 Excel，再触发邮件或 HTTP MCP 预警。
-- Spring AI 模型接入：默认通过 `ollama` 调用项目模型，也可切到 `openai`；`mock` 只作为无模型离线演示。
-- 可替换知识库：默认本地轻量检索，可打开 Chroma 镜像和查询。
+This is an educational software assistant. It does **not** diagnose conditions, replace medical or
+psychological professionals, or provide a clinical safety guarantee. High-risk classification and
+notification are software-assisted workflows; a real deployment requires reviewed emergency policy,
+trained staff, secured recipients and operational monitoring.
 
-## Real Model 与 Agent Runtime 边界
+## Architecture
 
-P5V 增加了一条使用本地微调模型的非流式纵向链路：
-
-```text
-AgentExecutionCoordinator
-    ↓
-AgentRunner
-    ↓
-Spring AI Provider Adapter
-    ↓
-Ollama OpenAI-compatible API（127.0.0.1:11434）
-    ↓
-mindbridge-qwen2.5-7b-ft
-    ↓
-ToolCall → ToolExecutor → ToolResult → Model → Final Answer
+```mermaid
+flowchart TD
+    A[Authenticated Student API] --> B[Intent and Risk Assessment]
+    B --> C{HIGH risk?}
+    C -- yes --> D[Durable Report + Alert Record + Notification Intent]
+    C -- no --> E[Context Assembly]
+    D --> E
+    E --> M[Conversation Memory]
+    E --> S[Deterministic Skills - suppressed for HIGH]
+    E --> R[Hybrid RAG MVP - untrusted evidence]
+    M --> X[Immutable Context Snapshot]
+    S --> X
+    R --> X
+    X --> AR[Unified Agent Runtime]
+    AR --> TG[Tool Registry + Policy + Budget]
+    AR --> MG[Model Gateway]
+    MG --> L[Local Ollama Model]
+    AR --> RC[Checkpoint + Recovery]
+    AR --> SSE[SSE Final Answer]
+    SSE --> HP[Durable Chat History Projection]
+    D --> O[Claim-fenced Notification Outbox]
+    O --> N[Log / SMTP / HTTP / MCP notifier]
+    AR --> DB[(MySQL)]
+    AR --> RD[(Redis coordination/cancellation)]
 ```
 
-Spring AI 只负责和 Ollama 通信及转换 Tool Calling 协议，不拥有 Agent Loop，也不执行 Tool。
-模型只能看到当前 Run 的 `allowedTools`；模型返回的 ToolCall 仍必须经过强类型转换、
-Jakarta Validation、Policy 和 Runtime Middleware，最终只能由 `ToolExecutor` 执行。
+Important trust and ordering rules:
 
-真实模型测试默认关闭且不会影响 CI。先确保本机 Ollama 已经运行且已注册
-`mindbridge-qwen2.5-7b-ft:latest`，再显式运行：
+- CHAT requests do not retrieve knowledge. CONSULT and HIGH-risk requests may retrieve.
+- HIGH-risk report and notification intent are committed before retrieval begins.
+- Notification delivery is independent of the asynchronous Excel ledger write.
+- External RAG and multimodal text is encoded as non-authoritative
+  `UNTRUSTED_EVIDENCE_DATA_V1`, never promoted to SYSTEM instructions.
+- HIGH-risk multimodal decisions suppress ordinary Skill context using a trusted server decision.
+- Recovery restores the original snapshots/checkpoints; it does not re-retrieve historical evidence
+  or repeat admission and safety side effects.
+
+## Technology
+
+- Java 17, Spring Boot 3, WebFlux, Spring Security and Spring Data JPA
+- Spring AI with Ollama/OpenAI-compatible model adapters
+- MySQL 8, Redis 7 and Flyway migrations
+- Unified durable Agent Runtime with budgets, Tool Registry, policy engine and event stream
+- Configuration/context snapshots, leases, checkpoints and startup Recovery
+- BM25, persisted dense cosine retrieval and exact Reciprocal Rank Fusion (`k=60`)
+- SSE streaming, Testcontainers, JUnit 5 and Maven
+
+## Quick Start — verified Docker demo
+
+Prerequisites: Docker Desktop, Java 17/Maven for tests, and Ollama listening on
+`127.0.0.1:11434` with `mindbridge-qwen2.5-7b-ft:latest` registered.
 
 ```powershell
-mvn test -Preal-model
+ollama list
+docker compose up -d --build mysql redis app
+docker compose ps
+Invoke-RestMethod http://localhost:8080/actuator/health
 ```
 
-可通过 `OLLAMA_BASE_URL` 和 `OLLAMA_MODEL` 覆盖默认地址与模型。测试不会启动或停止
-Ollama，也不需要 OpenAI API Key。由于 Spring AI 1.0.0 原生 Ollama 映射会丢失
-ToolCall ID，P5V 的 Ollama adapter 使用 Spring AI OpenAI 协议客户端连接 Ollama 本地
-兼容端点，以保留审批、事件关联及 ToolResult 回灌所需的 provider ID。
+The default Compose topology is an explicitly local demo: MySQL + Redis + application, unified
+Runtime enabled, Hybrid RAG MVP enabled, `USE_CHROMA=false`, local Excel output and log-only
+notification delivery. It does not start the legacy Chroma adapter or Mailpit.
 
-大模型 LoRA 微调、合并、GGUF 转换和 Ollama 接入流程见：[docs/qwen25-7b-lora-finetune-guide.md](docs/qwen25-7b-lora-finetune-guide.md)。
+Open `http://localhost:8080` or verify the model configuration:
 
-## 目录
-
-```text
-src/main/java/com/multimodalAgent/agent
-├── config                 # 配置、安全、AI/MCP Bean
-├── controller             # Chat / Knowledge / Report API
-├── domain                 # JPA 实体与枚举
-├── dto                    # 请求与响应对象
-├── repository             # Spring Data JPA
-├── security               # 当前用户与认证查询
-└── service
-    ├── ai                 # Spring AI 模型适配器、mock 客户端与 Prompt
-    ├── knowledge          # 切块、检索、Chroma 网关
-    └── mcp                # Excel 与邮件/HTTP 预警工具
+```powershell
+curl.exe -u student:student123 http://localhost:8080/api/agent/status
 ```
 
-## 快速启动
+Stop the demo without deleting data:
 
-当前目录已经本地安装好 JDK 17 和 Maven，Ollama 也可以通过脚本自动启动。最省事的方式是直接运行：
-
-```bash
-cd multimodalAgent
-./scripts/run-dev.sh
+```powershell
+docker compose down
 ```
 
-启动后打开：
+The Compose database passwords and `admin/admin123`, `student/student123` are development-only
+fixtures. Do not expose this configuration publicly or reuse these credentials in production.
 
-```text
-http://localhost:8080
-```
+### Local script
 
-如果想手动分两步启动，先在一个终端启动 Ollama：
+On a Unix-like shell, `./scripts/run-dev.sh` verifies/starts Ollama and launches the same MVP mode:
 
-```bash
-cd multimodalAgent
-./scripts/start-ollama.sh
-```
+- `AGENT_RUNTIME_ENABLED=true`
+- `AGENT_CHAT_MIGRATION_ENABLED=true`
+- `AGENT_MEMORY_ENABLED=true`
+- `AGENT_SKILLS_ENABLED=true`
+- `RAG_HYBRID_MVP_ENABLED=true`
+- `RAG_RETRIEVAL_MODE=HYBRID_RRF`
+- `USE_CHROMA=false`
+- `AI_PROVIDER=ollama`
+- `OLLAMA_MODEL=mindbridge-qwen2.5-7b-ft:latest`
 
-再在另一个终端运行项目：
+Environment variables override each value. See [the demo guide](docs/p13/demo-guide.md) for manual
+Windows startup, rollback and troubleshooting.
 
-```bash
-cd multimodalAgent
-JAVA_HOME="$PWD/.tools/amazon-corretto-17.jdk/Contents/Home" \
-  .tools/apache-maven-3.9.9/bin/mvn -Dmaven.repo.local=.m2/repository spring-boot:run
-```
+## Demo Scenarios
 
-也可以运行已经打好的 jar：
+All chat calls use the authenticated student endpoint and return SSE.
 
-```bash
-cd multimodalAgent
-JAVA_HOME="$PWD/.tools/amazon-corretto-17.jdk/Contents/Home" \
-  .tools/amazon-corretto-17.jdk/Contents/Home/bin/java \
-  -jar target/multimodalAgent-agent-0.1.0.jar --server.address=127.0.0.1 --server.port=8080
-```
+```powershell
+# Ordinary CHAT: no RAG
+curl.exe -N -u student:student123 -H "Content-Type: application/json" `
+  -d '{"message":"你好，请介绍一下你能做什么"}' `
+  http://localhost:8080/api/chat/stream
 
-默认使用 H2 文件数据库、Ollama 大模型、本地 Excel 文件和日志预警。页面左上角会显示当前模型模式；如果本机没有启动 Ollama，聊天接口会提示模型连接失败。首次启动会创建两个账号：
+# Sleep Skill + CONSULT retrieval
+curl.exe -N -u student:student123 -H "Content-Type: application/json" `
+  -d '{"message":"最近总是睡不着，怎样调整作息？"}' `
+  http://localhost:8080/api/chat/stream
 
-```text
-admin / admin123
-student / student123
-```
+# Academic-pressure Skill
+curl.exe -N -u student:student123 -H "Content-Type: application/json" `
+  -d '{"message":"考试和论文堆在一起，我压力很大"}' `
+  http://localhost:8080/api/chat/stream
 
-## 调用示例
-
-```bash
-curl -N -u student:student123 \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"我最近很焦虑，晚上总是睡不着"}' \
+# Interpersonal Skill
+curl.exe -N -u student:student123 -H "Content-Type: application/json" `
+  -d '{"message":"我和室友发生冲突，不知道怎么沟通"}' `
   http://localhost:8080/api/chat/stream
 ```
 
-高风险示例会触发报告、Excel 写入和预警：
+The first SSE `meta` event contains `sessionId`. Send it in the next request to demonstrate durable
+two-turn memory:
 
-```bash
-curl -N -u student:student123 \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"我不想活了，感觉撑不下去了"}' \
+```json
+{"sessionId":"<meta-sessionId>","message":"请结合我刚才的情况继续给建议"}
+```
+
+HIGH-risk demonstration:
+
+```powershell
+curl.exe -N -u student:student123 -H "Content-Type: application/json" `
+  -d '{"message":"我不想活了，感觉马上会伤害自己"}' `
   http://localhost:8080/api/chat/stream
+
+curl.exe -u admin:admin123 http://localhost:8080/api/admin/reports
+curl.exe -u admin:admin123 http://localhost:8080/api/admin/alerts
 ```
 
-管理员查看后台报告：
+The report, AlertRecord and notification intent are persisted in one transaction before optional
+retrieval. The claim-fenced Outbox performs delivery independently from Excel reporting.
 
-```bash
-curl -u admin:admin123 http://localhost:8080/api/admin/reports
-```
+## Hybrid RAG MVP
 
-查看当前是否接入真实大模型：
+Administrator-maintained public-campus documents can be ingested through:
 
-```bash
-curl -u student:student123 http://localhost:8080/api/agent/status
-```
-
-管理员追加知识库：
-
-```bash
-curl -u admin:admin123 \
-  -H 'Content-Type: application/json' \
-  -d '{"source":"sleep-guide","content":"失眠时可先固定起床时间，减少睡前屏幕刺激，必要时联系校心理中心。"}' \
+```powershell
+curl.exe -u admin:admin123 -H "Content-Type: application/json" `
+  -d '{"source":"sleep-guide.md","content":"保持固定起床时间，睡前减少咖啡因和屏幕刺激。"}' `
   http://localhost:8080/api/admin/knowledge
 ```
 
-## 接入 Ollama / LoRA 模型
+Student conversations and private memory are not inserted into the shared index. Three independently
+tested modes are available through `RAG_RETRIEVAL_MODE`:
 
-默认模型配置就是本地 Ollama 路线，模型名为：
+- `BM25_ONLY`: NFKC normalization, Chinese Han unigram/bigram tokens, BM25 `k1=1.2`, `b=0.75`.
+- `DENSE_ONLY`: cosine ranking over persisted, model/dimension-bound embeddings.
+- `HYBRID_RRF`: exact `sum(1/(60+rank))`, stable tie-breaking and deduplication.
 
-```text
-multimodalAgent-qwen2.5-7b-ft:latest
+Without an embedding API key, the demo cannot create/query real dense vectors. Hybrid requests then
+report `LEXICAL_ONLY_DEGRADED`; this is expected and is not presented as Hybrid success. The 30-case
+offline benchmark uses deterministic fixture embeddings. The real-model demonstration uses the local
+LLM plus fixture embeddings; neither result is a real-embedding benchmark.
+
+To reproduce the legacy rollback path:
+
+```powershell
+$env:RAG_HYBRID_MVP_ENABLED="false"
 ```
 
-本地模型由这个 GGUF 权重创建：
+The old Chroma v1 adapter is not part of the MVP. It can be started only for compatibility work with
+`docker compose --profile legacy-chroma up -d chroma`; `USE_CHROMA=false` remains the demo default.
 
-```text
-models/multimodalAgent-qwen2.5-7b-ft/multimodalAgent-qwen2.5-7b-ft-q4_k_m.gguf
+## Verification
+
+```powershell
+mvn clean test
+mvn -P real-model "-Dtest=HybridRagRealModelDemoTest" test
+docker compose config
 ```
 
-首次运行或重新导入模型时执行：
+Default Maven tests are offline except for explicit Testcontainers suites. Real-model tests are
+opt-in and skip rather than fabricate success when Ollama/model prerequisites are missing.
 
-```bash
-cd multimodalAgent
-./scripts/create-finetuned-model.sh
-```
+## Technical Highlights
 
-之后直接启动项目：
+1. Durable Agent Runtime with one governed model/tool loop, execution budgets and deterministic
+   event/persistence semantics.
+2. Typed tool contracts, validation, policy enforcement, idempotency/reconciliation evidence and
+   reliable outcome recovery.
+3. Content-addressed configuration/context snapshots plus checkpoint-based same-run recovery without
+   duplicate admission or completed-tool execution.
+4. Deterministic Context Assembly combining isolated memory, versioned Skills, trusted policy and
+   provenance-bound untrusted evidence.
+5. Bounded Hybrid RAG MVP with real BM25 and dense branches, exact RRF, truthful degradation and a
+   deterministic 30-query evaluation suite.
+6. Transactional high-risk facts and a durable, retryable, claim-fenced notification Outbox that is
+   independent of Excel reporting.
 
-```bash
-cd multimodalAgent
-./scripts/run-dev.sh
-```
+## Safety and Deployment Notes
 
-如果终端提示 `ollama: command not found`，说明只是命令链接没建好；本项目脚本会直接调用 `/Applications/Ollama.app/Contents/Resources/ollama`。
+- API keys and service passwords are environment variables and must not be committed.
+- H2 Console is disabled by default. It may be enabled only for isolated local debugging with
+  `H2_CONSOLE_ENABLED=true`.
+- Log notification mode records only durable identifiers, not student text, assessment summaries or
+  recipients.
+- Synthetic retrieval fixtures contain no real student records.
+- SMTP recipients and emergency language must be reviewed for the deploying institution.
 
-没有本地模型、只想离线演示完整业务流程时，才使用 mock：
+## Limitations
 
-```bash
-cd multimodalAgent
-AI_PROVIDER=mock \
-JAVA_HOME="$PWD/.tools/amazon-corretto-17.jdk/Contents/Home" \
-  .tools/apache-maven-3.9.9/bin/mvn -Dmaven.repo.local=.m2/repository spring-boot:run
-```
+This release is a small, demonstrable MVP—not the complete production knowledge platform proposed by
+ADR-027. [ADR-028](docs/adr/ADR-028-p12-hybrid-rag-mvp.md) records the accepted boundary.
 
-也可以不用脚本，手动指定本地模型启动：
+Deferred capabilities include production multi-tenant knowledge ACLs, immutable Knowledge
+Generations and CAS publication, Chroma v2 publication, revocation/citation control-plane semantics,
+production-scale retrieval performance validation and clinical-grade safety guarantees.
 
-```bash
-cd multimodalAgent
-AI_PROVIDER=ollama \
-OLLAMA_BASE_URL=http://localhost:11434 \
-OLLAMA_MODEL=multimodalAgent-qwen2.5-7b-ft:latest \
-JAVA_HOME="$PWD/.tools/amazon-corretto-17.jdk/Contents/Home" \
-  .tools/apache-maven-3.9.9/bin/mvn -Dmaven.repo.local=.m2/repository spring-boot:run
-```
-
-## 打包给别人运行
-
-模型文件较大，建议单独压缩发送：
-
-```text
-models/multimodalAgent-qwen2.5-7b-ft/multimodalAgent-qwen2.5-7b-ft-q4_k_m.gguf
-```
-
-生成不含模型权重的应用发布包：
-
-```bash
-cd multimodalAgent
-./scripts/package-release.sh
-```
-
-脚本会在 `dist/` 下生成 `multimodalAgent-app-时间戳.tar.gz`。发布包包含源码、Dockerfile、docker-compose、脚本、文档、`models/multimodalAgent-qwen2.5-7b-ft/Modelfile` 和 `data/lora/psychqa.jsonl` 数据集；会排除模型权重、模型 zip、运行数据库、Excel 输出、日志、PDF 文档、`target/`、`.m2/`、`.tools/`、IDE 配置等本机产物。
-
-收到项目的人需要把模型 zip 解压到：
-
-```text
-multimodalAgent/models/multimodalAgent-qwen2.5-7b-ft/
-```
-
-然后执行：
-
-```bash
-cd multimodalAgent
-./scripts/create-finetuned-model.sh
-./scripts/run-dev.sh
-```
-
-如果用 Docker 部署数据库、Redis、Chroma、Mailpit：
-
-```bash
-docker compose up -d mysql redis chroma mailpit
-./scripts/create-finetuned-model.sh
-./scripts/run-dev.sh
-```
-
-如果不是 macOS，或 Ollama/JDK/Maven 不在默认路径，需要先安装 Ollama、JDK 17、Maven，并按实际路径设置 `OLLAMA_BIN`、`JAVA_HOME`、`MAVEN_BIN`。
-
-## 接入 OpenAI
-
-```bash
-cd multimodalAgent
-AI_PROVIDER=openai \
-OPENAI_API_KEY=你的_API_Key \
-OPENAI_MODEL=gpt-4o-mini \
-JAVA_HOME="$PWD/.tools/amazon-corretto-17.jdk/Contents/Home" \
-  .tools/apache-maven-3.9.9/bin/mvn -Dmaven.repo.local=.m2/repository spring-boot:run
-```
-
-## 使用 MySQL、Chroma、SMTP
-
-启动依赖：
-
-```bash
-docker compose up -d mysql redis chroma mailpit
-```
-
-使用 MySQL profile：
-
-```bash
-AI_PROVIDER=ollama \
-USE_CHROMA=true \
-MCP_EMAIL_MODE=smtp \
-ALERT_MAIL_RECIPIENTS=counselor@example.com \
-mvn spring-boot:run -Dspring-boot.run.profiles=mysql
-```
-
-Mailpit 管理页面：`http://localhost:8025`
-
-## MCP 工具模式
-
-Excel 工具：
-
-- `MCP_EXCEL_MODE=local`：默认写入 `./data/multimodalAgent-reports.xlsx`
-- `MCP_EXCEL_MODE=http`：调用 `MCP_EXCEL_URL/write`
-
-邮件工具：
-
-- `MCP_EMAIL_MODE=log`：默认只记录日志，便于本地演示
-- `MCP_EMAIL_MODE=smtp`：使用 Spring Mail 发送
-- `MCP_EMAIL_MODE=http`：调用 `MCP_EMAIL_URL/send`
-
-高风险链路按文档实现为：写入报告 -> 写入 Excel -> Excel 成功后发送预警 -> 更新状态。
+See [P13 architecture](docs/p13/architecture.md), [demo guide](docs/p13/demo-guide.md), and the
+[final delivery report](docs/p13/final-delivery-report.md).

@@ -33,7 +33,7 @@ public class AgentContextSnapshotEntity {
     private String contextHash;
 
     @Lob
-    @Column(name = "context_json", nullable = false, updatable = false)
+    @Column(name = "context_json", nullable = false, updatable = false, columnDefinition = "LONGTEXT")
     private String contextJson;
 
     @Column(name = "created_at", nullable = false, updatable = false)

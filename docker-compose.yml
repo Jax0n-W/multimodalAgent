@@ -1,12 +1,13 @@
 services:
   app:
     build: .
-    image: multimodalAgent-agent:0.1.0
-    container_name: multimodalAgent-agent
+    image: multimodalagent-agent:0.1.0
+    container_name: multimodalagent-agent
     depends_on:
-      - mysql
-      - redis
-      - chroma
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       SERVER_PORT: 8080
       SPRING_PROFILES_ACTIVE: mysql
@@ -17,9 +18,17 @@ services:
       REDIS_PORT: 6379
       AI_PROVIDER: ${AI_PROVIDER:-ollama}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-multimodalAgent-qwen2.5-7b-ft:latest}
-      USE_CHROMA: ${USE_CHROMA:-true}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mindbridge-qwen2.5-7b-ft:latest}
+      AGENT_RUNTIME_ENABLED: ${AGENT_RUNTIME_ENABLED:-true}
+      AGENT_CHAT_MIGRATION_ENABLED: ${AGENT_CHAT_MIGRATION_ENABLED:-true}
+      AGENT_MEMORY_ENABLED: ${AGENT_MEMORY_ENABLED:-true}
+      AGENT_SKILLS_ENABLED: ${AGENT_SKILLS_ENABLED:-true}
+      RAG_HYBRID_MVP_ENABLED: ${RAG_HYBRID_MVP_ENABLED:-true}
+      RAG_RETRIEVAL_MODE: ${RAG_RETRIEVAL_MODE:-HYBRID_RRF}
+      USE_CHROMA: ${USE_CHROMA:-false}
       CHROMA_BASE_URL: http://chroma:8000
+      H2_CONSOLE_ENABLED: "false"
+      MCP_EXCEL_MODE: ${MCP_EXCEL_MODE:-local}
       MCP_EMAIL_MODE: ${MCP_EMAIL_MODE:-log}
       MAIL_HOST: mailpit
       MAIL_PORT: 1025
@@ -32,29 +41,37 @@ services:
 
   mysql:
     image: mysql:8.4
-    container_name: multimodalAgent-mysql
+    container_name: multimodalagent-mysql
     environment:
       MYSQL_DATABASE: multimodalAgent
       MYSQL_USER: multimodalAgent
       MYSQL_PASSWORD: multimodalAgent
       MYSQL_ROOT_PASSWORD: root
-    ports:
-      - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -umultimodalAgent -pmultimodalAgent --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
 
   redis:
     image: redis:7.2-alpine
-    container_name: multimodalAgent-redis
+    container_name: multimodalagent-redis
     command: redis-server --appendonly yes
-    ports:
-      - "6379:6379"
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   chroma:
     image: chromadb/chroma:latest
-    container_name: multimodalAgent-chroma
+    container_name: multimodalagent-chroma
+    profiles: ["legacy-chroma"]
     ports:
       - "8000:8000"
     volumes:
@@ -62,7 +79,8 @@ services:
 
   mailpit:
     image: axllent/mailpit:latest
-    container_name: multimodalAgent-mailpit
+    container_name: multimodalagent-mailpit
+    profiles: ["smtp-demo"]
     ports:
       - "1025:1025"
       - "8025:8025"
