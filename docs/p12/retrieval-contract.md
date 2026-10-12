@@ -29,6 +29,8 @@ record RetrievalRequest(
     RetrievalPrincipal principal,
     Set<String> trustedCorpusFilter,
     String boundGenerationId,
+    GenerationCapability requiredCapability,
+    CapabilityFallback capabilityFallback,
     Instant deadline,
     RetrievalMode mode,
     String contractVersion
@@ -41,8 +43,18 @@ at least `topK`, and bounded. Principal, corpora, generation, deadline, mode, an
 derived from authenticated/server state. Unknown client JSON fields are rejected; document/version/
 chunk IDs and raw ACL filters are not accepted search inputs.
 
-`boundGenerationId` is read once from `kb_active_generations` for a fresh call or restored from durable
-tool execution metadata for Recovery. It is never chosen by the model.
+`boundGenerationId` and its immutable capability are read together from `kb_active_generations` plus
+`kb_index_generations` for a fresh call or restored from durable tool execution metadata for Recovery.
+They are never chosen by the model. Trusted modes are:
+
+- `LEXICAL_ONLY`: accepts an active LEXICAL_ONLY or HYBRID generation and runs only lexical search;
+- `HYBRID_REQUIRED`: accepts HYBRID only; mismatch returns
+  `UNAVAILABLE/GENERATION_CAPABILITY_MISMATCH` with zero evidence; and
+- `HYBRID_REQUIRED` with `ALLOW_LEXICAL_DEGRADE`: a trusted server policy may accept LEXICAL_ONLY,
+  run lexical only, and return `DEGRADED/GENERATION_CAPABILITY_MISMATCH`.
+
+The public request cannot choose fallback. There is one active pointer; capability compatibility is
+validated after binding and before either backend executes.
 
 ## Branch contracts
 
@@ -83,26 +95,36 @@ lifecycle, scope, and ACL, and supplies canonical content. Distance is converted
 named branch score only if the collection metric makes that conversion defined; raw distance is also
 retained in diagnostics. No score is compared with lexical relevance.
 
-## Fusion and final ordering
+## Fusion and final ordering (normative)
 
-Deduplicate by exact `chunkId`. For each branch's post-authorization list, compute:
+Authorize first, then assign branch ranks starting from one. Deduplicate by exact
+`(boundGenerationId, chunkId)`. For each branch's post-authorization list, compute:
 
 ```text
-rrfScore(c) = Σbranch-containing-c 1 / (60 + rank(branch, c))
+RRF(c) = Σ over branches b containing c of 1 / (60 + rank_b(c))
 ```
 
-The constant is contract version `rrf-v1-k60`. A candidate present in both branches carries both raw
-scores and ranks. Sort fused candidates by:
+Missing branches contribute zero. The constant is contract version `rrf-v1-k60`. A candidate present
+in both branches carries both raw scores and ranks. Branch-local order is raw score descending, then
+`chunkId` ascending using unsigned UTF-8 byte lexicographic order. Sort fused candidates by:
 
 1. RRF score descending;
 2. best (smallest) branch rank ascending;
 3. number of contributing branches descending; and
-4. `chunkId` ascending by binary code-point order.
+4. `chunkId` ascending using unsigned UTF-8 byte lexicographic order.
 
-This ordering is total and deterministic for the same index/query/embedding response. Apply topK only
-after optional reranking and final authorization. Neighbor expansion is not implicit; if introduced,
-neighbors are separately authorized evidence with their own chunk/citation IDs and cannot displace
-ranked hits without a versioned ranking rule.
+Locale, database collation, Java default collation, hash-map iteration, branch input permutation,
+thread completion, and backend arrival order are forbidden ranking inputs. RRF is represented for
+comparison as an exact reduced rational (`BigInteger` numerator/denominator); sums and comparisons
+use exact integer arithmetic. A scale-18, `HALF_EVEN` decimal may be serialized for diagnostics but
+never controls order. The branch-count criterion is retained even where the current two-branch/k=60
+formula makes it mathematically redundant, because it is explicit provenance and preserves a total
+contract if a future version changes branch composition; that change still requires a new version.
+
+This is the sole normative RRF definition. Other P12 documents reference it rather than defining
+variants. Apply topK only after applicable authorization, fusion, and optional reranking. Neighbor
+expansion is not implicit; if introduced, neighbors are separately authorized evidence with their
+own chunk/citation IDs and cannot displace ranked hits without a versioned ranking rule.
 
 ## Optional reranker
 
@@ -186,6 +208,10 @@ other fails/times out, fuse the successful authorized list and return `DEGRADED`
 with zero candidates, return `EMPTY`. If neither produces a trustworthy result, return `UNAVAILABLE`.
 An ACL/control-plane error returns `DENIED_UNVERIFIED` with zero evidence; it is never downgraded into
 a partial authorization decision.
+
+A capability mismatch is evaluated before branch start. HYBRID_REQUIRED returns UNAVAILABLE with no
+evidence. Trusted ALLOW_LEXICAL_DEGRADE runs only lexical retrieval and returns DEGRADED. An ACTIVE
+state never substitutes for the required capability.
 
 Callers must not retry inside the same request beyond the adapter's explicitly bounded transport
 policy. Build/index retries are separate from retrieval latency.

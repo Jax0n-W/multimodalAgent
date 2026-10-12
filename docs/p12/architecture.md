@@ -19,7 +19,7 @@ has been implemented. ADR-027 is the normative decision record.
 | Result | `SearchResult` | Only numeric chunk ID, source, content, score. | Supersede with typed `RetrievalEvidence`; keep compatibility mapping temporarily. |
 | Legacy orchestration | `AgenticRagService`, `AgenticRagResult` | Up to two retrieve/review cycles; auxiliary `AiClient.complete` calls are outside Model Gateway and budget ownership. | Feature-flagged compatibility only, then retire after P12.6 gates. |
 | Runtime tool | `KnowledgeSearchTool`, `KnowledgeSearchInput` | Reuses Tool Registry/Policy Engine, but has no trusted retrieval principal/generation binding. | Keep public query/topK shape; add server-bound contextual adapter. |
-| Fresh chat | `ChatMigrationFacade` | RAG evidence is already sent through `UntrustedEvidenceContextSource`, but retrieval currently precedes durable HIGH-risk report creation in the non-chat path. | Reorder in P12.5: risk fact/outbox first, then bounded retrieval. |
+| Fresh chat | `ChatMigrationFacade` and `ChatService` | P12.1H now assesses and commits the existing report/outbox transaction before legacy RAG. Known operational retrieval failure degrades to empty evidence only for HIGH risk. | Preserve this ordering while replacing retrieval in P12.5. |
 | Trust boundary | `UntrustedEvidenceContextSource`, `AgentContextAssembler` | Strong reusable P11.4 boundary: canonical non-SYSTEM evidence, deterministic ordering/provenance. | Reuse unchanged; encode typed P12 evidence as untrusted data. |
 | Snapshots/recovery | `AgentContextSnapshot`, `ContextAssemblingAgentExecutionCoordinator`, P10 recovery | Fresh context is content-addressed; Recovery resumes checkpoints and does not reassemble context. | Preserve. Never rerun historical retrieval to refresh evidence. |
 | Evaluation | P9 eval package, ADR-015, `docs/eval/README.md` | Good deterministic provenance/reporting, but `contractPass` measures Runtime contract behavior, not retrieval relevance. | Reuse infrastructure patterns in a separate retrieval suite. |
@@ -53,9 +53,12 @@ Chroma compatibility.
 - `tool/builtin/KnowledgeSearchTool.java`: Tool Registry/Policy wiring is reusable, but `execute`
   forwards only query/topK to `KnowledgeService`; `AgentTool` does not currently receive the
   `AgentRuntimeContext` that ToolExecutor already holds, so trusted user/scope binding is absent.
-- `service/chat/ChatMigrationFacade.java` lines 137-159 at this baseline invoke `ragService.retrieve`
-  before `saveReport`. That ordering must change in P12.5 because HIGH-risk durable reporting/outbox
-  cannot depend on retrieval availability.
+- At the original P12.1 baseline, `service/chat/ChatMigrationFacade.java` and `ChatService.java`
+  invoked `AgenticRagService.retrieve` before assessment/report persistence. P12.1H corrects both:
+  authoritative assessment and `persistReportWithNotificationIntents` now return (and therefore
+  commit through the transactional proxy) before retrieval begins. Only classified operational
+  timeout/backend/data-access failures degrade for HIGH risk; security, integrity, and unexpected
+  failures still propagate.
 - `context/UntrustedEvidenceContextSource.java` and `AgentContextAssembler.java` are positive reusable
   evidence: retrieved data is a canonical non-SYSTEM envelope with deterministic source ordering and
   provenance. `ContextAssemblingAgentExecutionCoordinator` persists that snapshot only for fresh
@@ -70,7 +73,7 @@ Admin/API source
        -> durable index-build task
               |-> MySQL ngram lexical projection [derived, generation-bound]
               `-> EmbeddingGateway -> Chroma v2 [derived, generation-bound]
-       -> verifier -> READY
+       -> capability-aware verifier -> READY
        -> MySQL compare-and-swap active-generation pointer
 
 Trusted RetrievalPrincipal + query
@@ -95,19 +98,22 @@ generation are outside the retrieval engine.
    the existing result without creating duplicate chunks or external work.
 4. Chunk deterministically and transactionally append the immutable version/chunk records plus a
    durable build task. The commit contains no Chroma call.
-5. A leased worker creates a `BUILDING` generation or contributes the version to an explicit build.
-   Every external operation uses deterministic record IDs and can be retried.
-6. Verify exact expected/actual chunk-ID sets, counts, hashes, embedding space, dimension, and lexical
-   projection. Failed verification marks the job/generation `FAILED`; the previous active generation
-   remains live.
+5. A leased worker creates a `BUILDING` generation with immutable `LEXICAL_ONLY` or `HYBRID`
+   capability. Every external operation uses deterministic record IDs and can be retried.
+6. Verify the declared capability. Both profiles require exact manifest/lexical identity and hashes;
+   HYBRID additionally requires the exact target-generation point-ID set, per-point metadata/hash,
+   embedding space, dimension, and collection UUID. Counts alone never pass. Failure marks the
+   generation `FAILED`; the previous active generation remains live.
 7. Mark `READY`, then atomically compare-and-swap the corpus pointer to `ACTIVE`. A conflict causes a
    reread/replan, never a blind overwrite.
 8. Retain the previous generation for rollback. Retirement/revocation changes control-plane
    visibility immediately; cleanup happens later.
 
-Incremental update means reusing unchanged immutable versions/chunks and deterministic external
-records while building a complete new generation manifest. It does not mean modifying an active
-generation in place.
+Incremental update means reusing unchanged immutable versions/chunks and, when the entire embedding
+input/space identity matches, embedding computations. It still builds a complete new manifest. With
+`generationId:chunkId` point IDs, an old point is not the new generation's record: the target point
+must be created or an existing target-generation point must be identity-verified. Active generations
+and capability are never upgraded in place.
 
 ## Retrieval paths
 
@@ -139,15 +145,22 @@ substitute the new active generation.
 ## Publication and consistency rules
 
 - A query observes exactly one generation per corpus.
-- Both branches use that generation, even while a new generation is building.
-- `READY` means complete and verified; `ACTIVE` means selected by the authoritative pointer.
+- State and capability are separate. `READY` means complete for the declared immutable capability;
+  `ACTIVE` only means selected and does not imply HYBRID.
+- P12.3 publishes LEXICAL_ONLY. P12.4 publishes a new HYBRID generation; it does not upgrade P12.3.
+- Lexical-only retrieval may use either capability. Hybrid-required retrieval uses HYBRID only. A
+  trusted allow-degrade mode may return lexical evidence from LEXICAL_ONLY as `DEGRADED`; otherwise
+  capability mismatch is `UNAVAILABLE` with no evidence.
+- Both hybrid branches use the same HYBRID generation, even while another generation is building.
 - Chroma or lexical leftovers from uncommitted/failed builds are invisible because they lack the
   active generation binding and current MySQL authorization.
 - A successful pointer swap is the publication linearization point.
 - Crash before swap leaves the old generation active. Crash after swap is safe because verification
   already completed and the pointer is durable.
-- Repeated job delivery performs idempotent upsert/check operations and cannot create a second
-  version or duplicate vector record.
+- Repeated job delivery performs idempotent upsert/check operations. For a HYBRID target, it may skip
+  only a point already present under the same target-generation ID with exact vector and metadata.
+- Target-generation actual/expected point IDs must match exactly; old-generation retained points are
+  filtered by generation and remain available for rollback/Recovery.
 - Embedding-space change always builds a new generation. In-place re-embedding is forbidden.
 
 ## Security and privacy controls
@@ -177,6 +190,7 @@ substitute the new active generation.
 | Both branches fail | `UNAVAILABLE` | Return no evidence; caller abstains from knowledge-specific claims. |
 | No authorized match | `EMPTY` | No evidence; do not reveal whether unauthorized matches exist. |
 | ACL/control-plane unavailable | `DENIED_UNVERIFIED` | Fail closed; do not treat as ordinary partial success. |
+| Active generation is LEXICAL_ONLY for HYBRID_REQUIRED | `UNAVAILABLE` | Zero evidence; trusted allow-degrade mode instead yields lexical `DEGRADED`. |
 | Generation changes mid-query | Bound generation remains | Both branches and citations keep the generation read at start. |
 | Index build fails | Old generation remains active | Job is retryable/quarantined by reason; no partial publication. |
 | Revocation races retrieval | Final MySQL authorization wins | Candidate removed; result may contain fewer than topK. |

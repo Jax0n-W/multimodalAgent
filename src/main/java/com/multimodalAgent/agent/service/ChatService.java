@@ -18,6 +18,7 @@ import com.multimodalAgent.agent.service.ai.AiMessage;
 import com.multimodalAgent.agent.service.ai.PromptTemplates;
 import com.multimodalAgent.agent.service.knowledge.AgenticRagResult;
 import com.multimodalAgent.agent.service.knowledge.AgenticRagService;
+import com.multimodalAgent.agent.service.knowledge.KnowledgeRetrievalFailureClassifier;
 import com.multimodalAgent.agent.service.knowledge.KnowledgeService;
 import com.multimodalAgent.agent.service.memory.ShortTermMemoryService;
 import com.multimodalAgent.agent.service.memory.ShortTermMemoryService.MemoryMessage;
@@ -33,6 +34,8 @@ import java.util.UUID;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -44,6 +47,8 @@ import reactor.core.scheduler.Schedulers;
  * <p>负责会话管理、Redis 短期记忆、MySQL 长期记忆、意图分类、RAG 检索、模型流式调用和后台报告触发。</p>
  */
 public class ChatService {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
     private final UserAccountRepository userAccountRepository;
     private final ChatSessionRepository chatSessionRepository;
@@ -160,7 +165,6 @@ public class ChatService {
 
         // 普通聊天不进入心理评估和 RAG，避免把学习/生活问题强行变成测评。
         if (intent != IntentType.CHAT) {
-            ragResult = agenticRagService.retrieve(modelInput, modelHistory);
             assessment = multimodalAnalysis == null
                     ? assessmentService.assess(modelInput, modelHistory)
                     : multimodalAnalysis.fusedAssessment();
@@ -174,12 +178,31 @@ public class ChatService {
                         assessment.summary());
             }
             report = saveReport(user, session, input, intent, assessment, multimodalAnalysis);
+            ragResult = retrieveAfterSafetyPersistence(modelInput, modelHistory, assessment.risk());
         }
 
         RiskLevel riskLevel = assessment == null ? RiskLevel.LOW : assessment.risk();
         List<AiMessage> messages = buildMessages(user, intent, riskLevel, ragResult, modelHistory);
         Long reportId = report == null ? null : report.getId();
         return new PreparedConversation(user, session, intent, riskLevel, messages, reportId);
+    }
+
+    private AgenticRagResult retrieveAfterSafetyPersistence(
+            String input,
+            List<AiMessage> history,
+            RiskLevel risk
+    ) {
+        try {
+            return agenticRagService.retrieve(input, history);
+        } catch (RuntimeException failure) {
+            var reason = KnowledgeRetrievalFailureClassifier.classify(failure);
+            if (risk == RiskLevel.HIGH && reason.isPresent()) {
+                log.warn("HIGH-risk knowledge retrieval degraded after safety commit: reason={}",
+                        reason.orElseThrow());
+                return AgenticRagResult.empty();
+            }
+            throw failure;
+        }
     }
 
     private Flux<ServerSentEvent<ChatStreamEvent>> streamPrepared(PreparedConversation prepared) {

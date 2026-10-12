@@ -101,11 +101,15 @@ entities and constraints are normative.
 
 ### `kb_index_generations`
 
-- `generation_id`, corpus/scope, embedding space, chunker identity, lexical config hash.
-- Manifest hash, expected version/chunk counts, actual lexical/vector counts, verification report hash.
+- `generation_id`, corpus/scope, immutable `capability` (`LEXICAL_ONLY` or `HYBRID`), optional
+  embedding space (required for HYBRID), chunker identity, and lexical config hash.
+- Manifest hash, expected version/chunk counts, expected target vector-point-set hash for HYBRID,
+  actual lexical/vector counts, and a capability-specific verification report hash.
 - State: `BUILDING`, `VERIFYING`, `READY`, `ACTIVE`, `RETIRED`, `FAILED`.
 - `ACTIVE` is a projection of the pointer; code must not select `MAX(created_at)`.
-- Failure reason and timestamps are auditable. Identity/configuration fields are immutable.
+- State and capability are independent: READY means all declared capability requirements passed;
+  ACTIVE does not imply HYBRID. Capability and identity/configuration fields are immutable.
+- Failure reason, verifier version, verified requirement set, and timestamps are auditable.
 
 ### `kb_generation_members`
 
@@ -120,7 +124,9 @@ entities and constraints are normative.
 - Activation executes `UPDATE ... WHERE corpus_id=? AND pointer_version=? AND generation_id=?old` in
   the same transaction that records the activation audit event.
 - Exactly one pointer exists for an initialized corpus. A READY generation may be reactivated for
-  rollback if retained and compatible.
+  rollback if retained and its capability is compatible with the trusted current retrieval mode.
+- The pointer does not duplicate capability; readers join the referenced generation and bind both
+  generation identity and capability in one read. A second active pointer is forbidden.
 
 ### `kb_index_tasks`
 
@@ -160,13 +166,26 @@ It then fetches authoritative chunk/body and ACL state from MySQL. A point not p
 generation manifest, with a hash mismatch, or denied by current policy is discarded and reported as
 an index-consistency defect.
 
+For a HYBRID generation, the expected target point set is exactly
+`{generation_id + ":" + chunk_id | chunk_id in generation manifest}`. Verification compares the
+generation-scoped actual ID set with that expected set and validates every point's chunk ID, content
+hash, embedding-space ID, dimension, collection UUID, and generation metadata. Matching counts alone
+never pass verification. Unexpected points carrying the target generation fail verification and are
+quarantined/cleaned; retained points for another generation remain invisible under the bound filter.
+
 ## Version, update, and retirement semantics
 
 - Same logical key and identical identity payload: reuse the version; no new indexing side effect.
 - Same logical key and different identity payload: append a version; never mutate the prior version.
 - Changed chunker or embedding space: build a new generation, even with unchanged documents.
-- Incremental builder may copy/reference unchanged manifest members and skip already verified vector
-  upserts, but the resulting generation manifest is complete.
+- Incremental builders may reuse an embedding computation for an unchanged chunk only when chunk
+  content hash and the complete EmbeddingSpace/preprocessing identity match. That avoids recomputing
+  vector values but does not publish the new generation's record.
+- Because point ID is `generationId:chunkId`, an old-generation point never proves that the new target
+  point exists. The builder must create the target point or verify an already-existing point with the
+  same target-generation ID and exact vector/metadata identity. Skipping after verification is an
+  idempotent retry within one target generation, not cross-generation record reuse.
+- The resulting generation manifest and generation-scoped target point set are always complete.
 - Source retirement/revocation immediately affects MySQL authorization and schedules a new
   generation plus derived cleanup.
 - Physical deletion waits for audit retention, active/rollback generation retention, and any legal
@@ -181,9 +200,21 @@ BUILDING -> VERIFYING -> READY -> ACTIVE -> RETIRED -> cleanup eligible
     `-----------+----------+---------------------------> FAILED
 ```
 
-Only `READY` may be activated. A generation cannot be edited after `VERIFYING` begins. Activation of
-one generation demotes the old active generation to retained `READY`/`RETIRED` according to policy in
-the same transaction. The pointer, rather than a mutable state scan, defines reader truth.
+Capability is assigned in BUILDING and cannot be upgraded. Only capability-verified `READY` may be
+activated. A generation cannot be edited after `VERIFYING` begins. Activation of one generation
+demotes the old active generation to retained `READY`/`RETIRED` according to policy in the same
+transaction. The pointer, rather than a mutable state scan, defines reader truth. Lexical retrieval
+accepts either capability; hybrid-required retrieval accepts HYBRID only. Capability-aware rollback
+must reject an incompatible target unless trusted policy was first changed to allow lexical degrade.
+
+| State | Capability | Verification/activation | Retrieval | Rollback |
+| --- | --- | --- | --- | --- |
+| BUILDING / VERIFYING | LEXICAL_ONLY | Exact manifest, hashes, lexical projection/config in progress; cannot activate. | None. | Not a target. |
+| READY / ACTIVE | LEXICAL_ONLY | All lexical requirements verified; READY may be activated by CAS. | Lexical allowed; hybrid required rejects, trusted allow-degrade returns lexical DEGRADED. | Allowed only when configured mode accepts lexical capability. |
+| BUILDING / VERIFYING | HYBRID | Lexical plus exact target point set/identity/space/dimension verification in progress; cannot activate. | None. | Not a target. |
+| READY / ACTIVE | HYBRID | All lexical and dense requirements verified; READY may be activated by CAS. | Lexical and hybrid allowed. | Allowed while retained and embedding/retrieval contract is supported. |
+| RETIRED | Either | Immutable evidence retained under policy; cannot serve new active reads. | Historical Recovery-bound access only when retained and authorized. | May be restored to READY only through an audited compatibility verification; never silently. |
+| FAILED | Either | Verification evidence records failure; cannot activate. | None. | Not a target. |
 
 ## Crash and retry matrix
 
@@ -193,6 +224,9 @@ the same transaction. The pointer, rather than a mutable state scan, defines rea
 | After version/job commit, before worker | `PENDING` job | Scanner claims with new token. |
 | During extraction/chunk transaction | Prior state or complete append | Reread; deterministic hashes prevent duplicates. |
 | After Chroma upsert, before task completion | Point may exist | Read/check deterministic point ID and hash, then complete or upsert idempotently. |
+| New HYBRID generation has only an old-generation point for an unchanged chunk | Target point absent | Reuse computation if compatible, but create and verify `{newGeneration}:{chunkId}`. |
+| Target point ID has wrong hash, metadata, space, or dimension | Corrupt target record | Fail verification and repair/quarantine; never mark READY from row count. |
+| Chroma has unexpected target-generation points | Actual ID set differs from manifest | Fail exact-set verification; extra points remain invisible and are cleaned. |
 | During lexical batch | Partial generation rows | Repeat upsert/delete only within non-active generation, then exact-set verify. |
 | After verification, before pointer swap | READY generation, old active pointer | Retry CAS activation. |
 | After pointer swap, before response | New pointer durable | Reread pointer; do not activate twice. |
@@ -218,9 +252,10 @@ the same transaction. The pointer, rather than a mutable state scan, defines rea
 2. Same request key with another payload is rejected.
 3. Version/chunk identity fields cannot be updated.
 4. Every generation member resolves to an exact chunk/version/document chain.
-5. Only a verified READY generation can win the active-pointer CAS.
+5. Only a capability-verified READY generation can win the active-pointer CAS.
 6. Concurrent activations have exactly one winner.
 7. Revoked/retired/unauthorized documents fail the authoritative join even if derived rows remain.
 8. A stale claim token cannot advance an ingestion/index job.
-9. Dimension/embedding-space mismatch cannot reach READY.
+9. A HYBRID dimension, embedding-space, collection, target-ID-set, or metadata mismatch cannot reach READY.
 10. Cleanup cannot select the active generation or a retained rollback generation.
+11. LEXICAL_ONLY READY requires no dense evidence and never satisfies HYBRID_REQUIRED retrieval.

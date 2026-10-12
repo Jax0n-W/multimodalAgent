@@ -20,8 +20,9 @@ Each dataset release contains:
   lifecycle state, language, and expected citations;
 - query cases with query ID, text, trusted principal fixture, allowed corpora, relevance judgments,
   acceptable evidence sets, answerability class, and tags; and
-- the chunker, lexical configuration, embedding-space fixture, generation manifest, and expected
-  index hash used for the run.
+- the chunker, lexical configuration, immutable generation capability, embedding-space fixture when
+  required, generation manifest, expected target point-ID-set hash, and expected index hash used for
+  the run.
 
 Fixtures are synthetic or explicitly authorized and contain no real student conversation, health
 record, student identifier, or production credential. Campus names, phone numbers, people, dates, and
@@ -44,9 +45,12 @@ URLs are fictional and visibly labeled in source metadata.
 11. Lexical failure, embedding failure, Chroma timeout/version mismatch, ACL-store failure, and index
     hash inconsistency.
 12. Deterministic tie cases, duplicate lexical/dense hits, and two-generation activation races.
-13. Recovery fixtures: frozen pre-admission evidence, durable tool result, unknown retry against a
+13. LEXICAL_ONLY ACTIVE behavior for lexical, HYBRID_REQUIRED, and trusted allow-degrade modes.
+14. HYBRID exact target-point-set failures: old-generation-only reused chunk, missing/extra point,
+   wrong dimension, incompatible space, and target ID with mismatched metadata/hash.
+15. Recovery fixtures: frozen pre-admission evidence, durable tool result, unknown retry against a
     retained bound generation, and missing bound generation.
-14. HIGH-risk cases where retrieval hangs/fails after durable report/notification intent creation.
+16. HIGH-risk cases where retrieval hangs/fails after durable report/notification intent creation.
 
 At least 20% of answerable queries are Chinese, at least 20% are semantic-paraphrase cases, and at
 least 20% of all cases are negative/no-answer/isolation cases. These are proposed composition gates,
@@ -63,9 +67,10 @@ topK/candidateK, and query order:
 - hybrid plus the named reranker, only if introduced.
 
 The report does not require hybrid to win every metric, and it never merges provider-dependent and
-deterministic/offline scores into one baseline. An experiment is rejected as non-comparable if its
-manifest, embedding space, generation, ACL policy, or retrieval contract differs without an explicit
-new baseline.
+deterministic/offline scores into one baseline. Generation capability and retrieval mode are baseline
+identity. LEXICAL_ONLY results cannot be labeled or compared as HYBRID. An experiment is rejected as
+non-comparable if its manifest, capability, embedding space, target-point-set hash, generation, ACL
+policy, or retrieval contract differs without an explicit new baseline.
 
 ## Metrics
 
@@ -157,7 +162,9 @@ are reported rather than hidden by retries.
 
 - identity/canonicalization golden vectors;
 - chunk determinism and boundary/offset integrity;
-- RRF formula, deduplication, total ordering, and permutation properties;
+- Normative RRF Golden Tests for one/both branches, equal RRF/best-rank/branch-count, input
+  permutations, repeated queries, final topK, multiple versions, authorization-before-ranking,
+  exact rational comparison, and unsigned-UTF-8 chunk-ID ordering;
 - deadline allocation and partial-failure state table;
 - evidence canonical JSON and citation checksum;
 - client input cannot set trusted fields; and
@@ -168,7 +175,8 @@ are reported rather than hidden by retries.
 - V13/V14 migration from every supported V12 baseline on fresh and populated MySQL;
 - `WITH PARSER ngram`, Chinese retrieval, transactional visibility, ACL joins, and `ngram_token_size`
   readiness rejection;
-- generation exact-set verification and concurrent activation CAS;
+- capability-specific generation verification, exact lexical/target-vector ID sets, incompatible
+  capability retrieval, trusted lexical degradation, and concurrent activation CAS;
 - Chroma v2 version handshake, collection UUID lookup, explicit vector dimension, generation filters,
   deterministic IDs, timeout/error mapping, and stale-point post-authorization; and
 - crash injection at every job/publication point listed in `data-model.md`.

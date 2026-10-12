@@ -28,6 +28,7 @@ import com.multimodalAgent.agent.service.ai.AiMessage;
 import com.multimodalAgent.agent.service.ai.PromptTemplates;
 import com.multimodalAgent.agent.service.knowledge.AgenticRagResult;
 import com.multimodalAgent.agent.service.knowledge.AgenticRagService;
+import com.multimodalAgent.agent.service.knowledge.KnowledgeRetrievalFailureClassifier;
 import com.multimodalAgent.agent.service.multimodal.MultimodalAnalysis;
 import com.multimodalAgent.agent.service.multimodal.MultimodalSignal;
 import com.multimodalAgent.agent.streaming.integration.StreamingAgentExecutionService;
@@ -137,7 +138,6 @@ public class ChatMigrationFacade {
         PsychologyAssessment assessment = null;
         AgenticRagResult rag = AgenticRagResult.empty();
         if (intent != IntentType.CHAT) {
-            rag = ragService.retrieve(classificationInput, history);
             assessment = multimodal == null
                     ? assessmentService.assess(classificationInput, history)
                     : multimodal.fusedAssessment();
@@ -154,9 +154,10 @@ public class ChatMigrationFacade {
         RiskLevel risk = assessment == null ? RiskLevel.LOW : assessment.risk();
 
         saveUserMessage(user, session, rawInput);
-        PsychologicalReport report = assessment == null ? null : saveReport(
-                user, session, rawInput, intent, assessment, multimodal
-        );
+        if (assessment != null) {
+            saveReport(user, session, rawInput, intent, assessment, multimodal);
+            rag = retrieveAfterSafetyPersistence(classificationInput, history, risk);
+        }
         String runId = "chat-" + compactUuid();
         AgentRunSpec spec = new AgentRunSpec(
                 runId,
@@ -175,6 +176,24 @@ public class ChatMigrationFacade {
                 trustedBusinessContext(intent, risk)
         ))).withUntrustedEvidence(untrustedEvidence(rag, multimodal));
         return new PreparedRuntimeChat(userId, session.getPublicId(), runId, executionRequest);
+    }
+
+    private AgenticRagResult retrieveAfterSafetyPersistence(
+            String input,
+            List<AiMessage> history,
+            RiskLevel risk
+    ) {
+        try {
+            return ragService.retrieve(input, history);
+        } catch (RuntimeException failure) {
+            var reason = KnowledgeRetrievalFailureClassifier.classify(failure);
+            if (risk == RiskLevel.HIGH && reason.isPresent()) {
+                log.warn("HIGH-risk knowledge retrieval degraded after safety commit: reason={}",
+                        reason.orElseThrow());
+                return AgenticRagResult.empty();
+            }
+            throw failure;
+        }
     }
 
     private Flux<ServerSentEvent<ChatStreamEvent>> execute(PreparedRuntimeChat prepared) {

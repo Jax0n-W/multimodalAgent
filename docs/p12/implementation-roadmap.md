@@ -85,7 +85,9 @@ real student data, relevance claims, and removal of legacy classes.
 
 Implement MySQL 8 ngram FULLTEXT projection, generation manifests, durable build/verify tasks,
 compare-and-swap activation/rollback, retention-safe cleanup, and lexical-only retrieval behind an
-internal flag. Establish the publication protocol before adding a second backend.
+internal flag. Every P12.3 generation has immutable `LEXICAL_ONLY` capability; READY verifies only
+that profile and never implies dense completeness. Establish the publication protocol before adding
+a second backend.
 
 ### Dependencies
 
@@ -112,7 +114,8 @@ internal flag. Establish the publication protocol before adding a second backend
 1. Production readiness fails if engine/parser/token size is incompatible.
 2. A BUILDING generation is invisible to readers.
 3. Manifest exact-set/hash verification is required before READY.
-4. Only READY can win active-pointer CAS; exactly one concurrent publisher wins.
+4. Only LEXICAL_ONLY-capability-verified READY can win active-pointer CAS; exactly one concurrent
+   publisher wins. ACTIVE does not imply HYBRID.
 5. A query binds one generation once and authorizes in MySQL before returning content.
 6. Raw lexical relevance never leaves its branch field or mixes with another score.
 7. Revocation/ACL removal denies new results before projection cleanup.
@@ -124,6 +127,8 @@ internal flag. Establish the publication protocol before adding a second backend
 - Deterministic score-tie `chunkId` ordering and candidateK bounds.
 - ACL scope/role/user allow/deny joins, unauthorized high-relevance negative.
 - Partial build, count-equal/set-different, content-hash mismatch, failed verification.
+- Capability immutability, LEXICAL_ONLY READY without dense evidence, and lexical retrieval against
+  both LEXICAL_ONLY and HYBRID fixtures.
 - Concurrent CAS activation, crash immediately before/after swap, rollback, and cleanup race.
 - Startup with wrong token size/version; H2 explicitly cannot satisfy production readiness.
 - Revocation during query/final authorization and stale projection content.
@@ -138,6 +143,7 @@ concurrent publisher, pointer conflict, revoked document remaining in projection
 Required MySQL Testcontainers suite runs without skips; generation exact-set and concurrency tests are
 100%; zero ACL/revocation leakage; crash matrix preserves either the old complete or new complete
 generation; lexical flag remains internal and legacy user behavior remains unchanged.
+The review must explicitly prove P12.3 does not create or claim a HYBRID generation.
 
 ### Explicit exclusions
 
@@ -151,7 +157,8 @@ deletion, and production traffic cutover.
 Replace the current v1 `ChromaGateway` for P12 traffic with a pinned REST v2 adapter, implement
 `EmbeddingSpace`/deadline/batch contracts, dense publication and verification, independent parallel
 branches, RRF, typed evidence/citations, and partial-backend failure behavior. Keep callers behind a
-disabled/shadow feature flag.
+disabled/shadow feature flag. P12.4 plans and publishes a new immutable `HYBRID` generation; it never
+upgrades a P12.3 LEXICAL_ONLY generation in place.
 
 ### Dependencies
 
@@ -176,12 +183,15 @@ disabled/shadow feature flag.
 ### Exact invariants
 
 1. Application-generated explicit vectors are used for both indexing and querying.
-2. Model/revision/dimension/preprocessing/metric mismatch fails before READY/query.
+2. HYBRID capability is fixed at planning; READY requires lexical completeness plus exact dense
+   target-generation completeness. Model/revision/dimension/preprocessing/metric mismatch fails it.
 3. Chroma server version and collection UUID are verified; name alone is not a data-plane identity.
-4. Vector point ID is deterministic `generationId:chunkId`; retry is idempotent.
+4. Vector point ID is deterministic `generationId:chunkId`. An old-generation point is never the
+   target record; same-generation retry may skip only after exact point identity verification.
 5. Every dense candidate is manifest/hash/lifecycle/ACL validated in MySQL before fusion/content.
 6. Lexical and dense branches use the same bound generation.
-7. RRF k=60 and the total tie order are exact; raw scores remain separate.
+7. RRF and total ordering are exactly the normative `retrieval-contract.md` algorithm; raw scores
+   remain separate and exact rational comparison controls ordering.
 8. One trustworthy branch may yield `DEGRADED`; ACL uncertainty yields zero evidence.
 9. Both-backend failure and no-answer return no fabricated evidence.
 10. Default logs/metrics contain no query, body, vector, or provider payload.
@@ -191,7 +201,15 @@ disabled/shadow feature flag.
 - Chroma v2 path/version/collection UUID contract against pinned container.
 - Explicit vector/dimension, metric, metadata filter, deterministic ID, upsert/retry, and timeout tests.
 - Dense stale point, unauthorized high-score hit, wrong hash, and missing manifest membership.
-- RRF golden/property tests: dedupe, raw-score isolation, deterministic ties, branch permutations.
+- Complete manifest but missing target points; reused chunk with only an old-generation point; crash
+  after target point creation; incompatible-space reuse; unexpected target-generation extras; wrong
+  dimension; and expected target ID with mismatched metadata/hash. Count equality must still fail.
+- Embedding-computation reuse requires identical chunk hash plus complete EmbeddingSpace/preprocessing
+  identity; target-generation point creation/verification remains mandatory.
+- RRF Golden Tests: one-branch candidates, candidate in both branches, equal RRF, equal best rank,
+  equal branch count, lexical/dense input permutation, repeated query, deterministic topK, multiple
+  document versions, and authorization before ranks. Tests assert exact rational comparison and the
+  stable unsigned-UTF-8 chunk-ID comparator.
 - Concurrent branch deadline and every partial/failure combination.
 - Generation re-embedding, new embedding space, failed build, activation, rollback, retained old query.
 - Typed evidence/citation canonicalization and current-authorization resolution.
@@ -207,7 +225,9 @@ degradation, dense-only degradation, both unavailable, ACL database loss, and de
 
 Pinned-container and MySQL integration suites pass without required skips; exact generation/embedding
 compatibility is proven; zero ACL/revocation leaks; canonical repeated results are identical in the
-offline profile; injected failures match the contract table; no production/chat cutover occurs.
+offline profile; every HYBRID target ID passes exact-set/per-point verification; capability mismatch
+and trusted lexical degradation match the contract; injected failures match the contract table; no
+production/chat cutover occurs.
 
 ### Explicit exclusions
 
@@ -220,8 +240,9 @@ fresh-chat reordering, legacy removal, production traffic, and P13.
 
 Integrate the accepted engine in the two declared modes, add a backward-compatible contextual-tool
 adapter, freeze pre-admission evidence into existing untrusted context, bind Runtime tool generation/
-principal, reorder HIGH-risk safety persistence before retrieval, and perform flag-controlled rollout
-from `AgenticRagService`. Preserve external chat/SSE/history and all P10 Recovery semantics.
+principal, preserve the P12.1H risk/report/outbox-before-retrieval ordering, and perform
+flag-controlled rollout from `AgenticRagService`. Preserve external chat/SSE/history and all P10
+Recovery semantics.
 
 ### Dependencies
 
@@ -260,8 +281,8 @@ from `AgenticRagService`. Preserve external chat/SSE/history and all P10 Recover
 6. Recovery never calls pre-admission retrieval or chooses a new generation for historical work.
 7. Unknown tool retry, when P10 permits it, uses the durable original binding or fails closed.
 8. Same run ID, no second admission/RUN_STARTED, unchanged config/context snapshots on Recovery.
-9. HIGH-risk report plus notification intent commits before any retrieval call; retrieval failure
-   cannot erase/delay dispatch eligibility or trusted safety policy.
+9. The P12.1H HIGH-risk report plus notification-intent commit remains before any retrieval call;
+   retrieval failure cannot erase/delay dispatch eligibility or trusted safety policy.
 10. SSE event order and chat-history projection remain ADR-025 compatible.
 11. No direct auxiliary `AiClient.complete` planning/review exists on the new path.
 

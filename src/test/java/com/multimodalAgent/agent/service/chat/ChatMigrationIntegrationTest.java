@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingClient;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiStreamEvent;
+import com.multimodalAgent.agent.config.multimodalAgentProperties;
 import com.multimodalAgent.agent.domain.EmotionLabel;
 import com.multimodalAgent.agent.domain.MessageRole;
 import com.multimodalAgent.agent.domain.RiskLevel;
@@ -23,16 +24,20 @@ import com.multimodalAgent.agent.runtime.AgentStopReason;
 import com.multimodalAgent.agent.service.ChatService;
 import com.multimodalAgent.agent.service.PsychologyAssessment;
 import com.multimodalAgent.agent.service.ai.AiClient;
+import com.multimodalAgent.agent.service.knowledge.AgenticRagResult;
+import com.multimodalAgent.agent.service.knowledge.AgenticRagService;
 import com.multimodalAgent.agent.service.mcp.AlertNotifier;
 import com.multimodalAgent.agent.service.mcp.ExcelReportWriter;
 import com.multimodalAgent.agent.service.multimodal.MultimodalAnalysis;
 import com.multimodalAgent.agent.service.multimodal.MultimodalSignal;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
@@ -42,15 +47,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -80,11 +92,139 @@ class ChatMigrationIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private ObjectMapper objectMapper;
     @Autowired private ChatHistoryProjector projector;
+    @Autowired private multimodalAgentProperties properties;
 
     @MockBean private OpenAiCompatibleStreamingClient provider;
     @MockBean private AiClient legacyAiClient;
+    @MockBean private AgenticRagService ragService;
     @MockBean private AlertNotifier alertNotifier;
     @MockBean private ExcelReportWriter excelReportWriter;
+
+    @BeforeEach
+    void defaultRetrievalAndRecipients() {
+        when(ragService.retrieve(anyString(), anyList())).thenReturn(AgenticRagResult.empty());
+        properties.getMcp().getEmail().setRecipients(List.of("counselor@example.com"));
+    }
+
+    @Test
+    void highRiskSafetyCommitPrecedesSuccessfulRetrieval() {
+        String input = "我想自杀，ordering-success";
+        AtomicBoolean durableBeforeRetrieval = new AtomicBoolean();
+        doAnswer(invocation -> {
+            var report = reports.findTop100ByOrderByCreatedAtDesc().stream()
+                    .filter(value -> input.equals(value.getContent()))
+                    .findFirst().orElseThrow();
+            durableBeforeRetrieval.set(
+                    report.getRiskLevel() == RiskLevel.HIGH
+                            && notificationIntents.findByReportId(report.getId()).size() == 1
+            );
+            return AgenticRagResult.empty();
+        }).when(ragService).retrieve(anyString(), anyList());
+        when(provider.stream(any())).thenReturn(response("安全支持"));
+
+        List<ChatStreamEvent> events = postChat(null, input);
+
+        assertEquals("done", events.get(events.size() - 1).type());
+        assertTrue(durableBeforeRetrieval.get());
+    }
+
+    @Test
+    void highRiskOperationalRetrievalFailureKeepsSafetyFactsAndTrustedPolicy() throws Exception {
+        String input = "我想自杀，retrieval-timeout";
+        doThrow(new QueryTimeoutException("knowledge timeout"))
+                .when(ragService).retrieve(anyString(), anyList());
+        when(provider.stream(any())).thenReturn(response("请立即联系身边可信任的人"));
+
+        List<ChatStreamEvent> events = postChat(null, input);
+
+        assertEquals("done", events.get(events.size() - 1).type());
+        var matching = reports.findTop100ByOrderByCreatedAtDesc().stream()
+                .filter(value -> input.equals(value.getContent()))
+                .toList();
+        assertEquals(1, matching.size());
+        assertEquals(RiskLevel.HIGH, matching.get(0).getRiskLevel());
+        assertEquals(1, notificationIntents.findByReportId(matching.get(0).getId()).size());
+        AgentRunEntity run = runs.findBySessionIdOrderByCreatedAtDesc(
+                events.get(0).sessionId()
+        ).get(0);
+        String context = snapshots.findById(run.getContextSnapshotId()).orElseThrow().getContextJson();
+        assertTrue(context.contains("Safety level: HIGH"));
+        verify(ragService, times(1)).retrieve(anyString(), anyList());
+    }
+
+    @Test
+    void multimodalHighRiskCannotBeDowngradedByRetrievalFailure() {
+        doThrow(new QueryTimeoutException("knowledge timeout"))
+                .when(ragService).retrieve(anyString(), anyList());
+        when(provider.stream(any())).thenReturn(response("多模态安全支持"));
+        UserAccount student = users.findByUsername("student").orElseThrow();
+        MultimodalAnalysis highRisk = analysis(
+                "audio", EmotionLabel.HIGH_RISK, RiskLevel.HIGH, "urgent safety signal"
+        );
+
+        List<ChatStreamEvent> events = chatService.streamMultimodal(
+                        student.getId(), new ChatRequest(null, "请分析我的状态"), highRisk
+                ).map(org.springframework.http.codec.ServerSentEvent::data)
+                .collectList().block(Duration.ofSeconds(20));
+
+        assertNotNull(events);
+        assertEquals("done", events.get(events.size() - 1).type());
+        var report = reports.findTop100ByOrderByCreatedAtDesc().stream()
+                .filter(value -> value.getSession().getPublicId().equals(events.get(0).sessionId()))
+                .findFirst().orElseThrow();
+        assertEquals(RiskLevel.HIGH, report.getRiskLevel());
+        assertEquals(1, notificationIntents.findByReportId(report.getId()).size());
+    }
+
+    @Test
+    void hangingRetrievalStartsOnlyAfterSafetyTransactionCommitted() throws Exception {
+        String input = "我想自杀，retrieval-hang";
+        CountDownLatch retrievalEntered = new CountDownLatch(1);
+        CountDownLatch releaseRetrieval = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            retrievalEntered.countDown();
+            if (!releaseRetrieval.await(10, TimeUnit.SECONDS)) {
+                throw new QueryTimeoutException("test retrieval timeout");
+            }
+            return AgenticRagResult.empty();
+        }).when(ragService).retrieve(anyString(), anyList());
+        when(provider.stream(any())).thenReturn(response("安全支持"));
+        UserAccount student = users.findByUsername("student").orElseThrow();
+
+        CompletableFuture<List<ChatStreamEvent>> response = chatService.streamChat(
+                        student.getId(), new ChatRequest(null, input)
+                ).map(org.springframework.http.codec.ServerSentEvent::data)
+                .collectList().toFuture();
+
+        assertTrue(retrievalEntered.await(10, TimeUnit.SECONDS));
+        var report = reports.findTop100ByOrderByCreatedAtDesc().stream()
+                .filter(value -> input.equals(value.getContent()))
+                .findFirst().orElseThrow();
+        assertEquals(RiskLevel.HIGH, report.getRiskLevel());
+        assertEquals(1, notificationIntents.findByReportId(report.getId()).size());
+        releaseRetrieval.countDown();
+        List<ChatStreamEvent> events = response.get(20, TimeUnit.SECONDS);
+        assertEquals("done", events.get(events.size() - 1).type());
+    }
+
+    @Test
+    void safetyTransactionFailurePreventsRetrieval() {
+        long reportCount = reports.count();
+        long intentCount = notificationIntents.count();
+        properties.getMcp().getEmail().setRecipients(List.of("x".repeat(241)));
+
+        List<ChatStreamEvent> events;
+        try {
+            events = postChat(null, "我想自杀，transaction-failure");
+        } finally {
+            properties.getMcp().getEmail().setRecipients(List.of("counselor@example.com"));
+        }
+
+        assertEquals(List.of("error"), types(events));
+        assertEquals(reportCount, reports.count());
+        assertEquals(intentCount, notificationIntents.count());
+        verify(ragService, never()).retrieve(anyString(), anyList());
+    }
 
     @Test
     void studentHttpEntryUsesFullRuntimeAndSecondTurnUsesDurableMemory() throws Exception {

@@ -106,17 +106,40 @@ One collection is used per embedding space. Record ID is `generationId:chunkId`;
 generation, scope, corpus, document, version, and lifecycle fields for coarse filtering. Every dense
 candidate is re-authorized against MySQL, because Chroma is not an authorization authority.
 
-### 5. Generations and atomic publication
+### 5. Generation capability and atomic publication
 
-An index generation is immutable after it leaves `BUILDING`. A builder writes the MySQL lexical
-projection and Chroma records under the same `generationId`, then verifies expected chunk IDs,
-counts, content hashes, and embedding-space identity. Only a verified generation may become `READY`.
+Generation lifecycle state and immutable capability are separate dimensions. Capability is assigned
+when the generation is planned and is part of generation identity and verification provenance:
+
+- `LEXICAL_ONLY` requires a complete MySQL lexical projection, exact manifest membership and content
+  hashes, current ACL/lifecycle enforcement, and a verified lexical configuration. Dense records are
+  neither required nor implied.
+- `HYBRID` requires every `LEXICAL_ONLY` guarantee plus the exact target-generation Chroma point set,
+  matching chunk/content metadata, the declared `EmbeddingSpace`, vector dimensions, collection UUID,
+  and dense publication provenance.
+
+`READY` means every requirement of the declared capability passed; `ACTIVE` means only that the
+authoritative pointer selected the generation. `ACTIVE` does not imply `HYBRID`, and capability may
+not be upgraded in place. P12.3 may therefore publish a valid `LEXICAL_ONLY` generation. P12.4 builds
+and publishes a new `HYBRID` generation rather than adding vectors to that generation.
+
+An index generation is immutable after it leaves `BUILDING`. A capability-aware builder writes and
+verifies all projections required by that capability. Counts are diagnostic only: READY requires
+exact expected/actual identity sets and hashes.
 
 Activation is a compare-and-swap MySQL transaction on one active-generation pointer per corpus. A
 retrieval reads that pointer once and binds both branches to it. A generation is never inferred from
 "latest" rows. Rollback is another pointer swap to a retained `READY` generation. Old generations
 are retained through the configured recovery/citation grace period and deleted only by an audited
 garbage-collection job when no retention hold remains.
+
+There remains one active pointer per corpus. `LEXICAL_ONLY` retrieval accepts either capability.
+`HYBRID_REQUIRED` accepts only `HYBRID`; a capability mismatch returns zero evidence with
+`UNAVAILABLE/GENERATION_CAPABILITY_MISMATCH`. A separately trusted
+`HYBRID_ALLOW_LEXICAL_DEGRADE` mode may use an active `LEXICAL_ONLY` generation and must return
+`DEGRADED` with that reason. A client/model cannot choose the degradation policy. Rollback tooling
+must validate the destination capability against the configured retrieval mode before the pointer
+swap. Historical Recovery keeps the original generation and capability binding.
 
 ### 6. Deletion and revocation
 
@@ -153,11 +176,16 @@ Lexical and dense branches independently return `candidateK` authorized candidat
 ordering is raw score descending then `chunkId` ascending. Candidates are deduplicated by exact
 `chunkId` and fused with Reciprocal Rank Fusion:
 
-`rrfScore(chunk) = sum(1 / (60 + branchRank))`
+`RRF(c) = sum over contributing branches b of 1 / (60 + rank_b(c))`
 
-Final pre-rerank order is RRF descending, best branch rank ascending, then `chunkId` ascending.
-This keeps uncalibrated branch scores separate. The active generation, query contract version, RRF
-constant, and every branch rank are returned as provenance.
+Ranks start at one and missing branches contribute zero. Final pre-rerank order is: exact RRF score
+descending, best branch rank ascending, contributing-branch count descending, then `chunkId`
+ascending using unsigned UTF-8 byte lexicographic order. Implementations compare RRF as an exact
+reduced rational using arbitrary-precision integers; a scale-18 `HALF_EVEN` decimal is display/
+serialization only and never drives ordering. Authorization precedes branch rank assignment.
+Deduplication uses `(generationId, chunkId)`. Hash-map iteration, branch completion, and backend
+arrival order cannot affect results. This paragraph defers to the normative algorithm in
+`docs/p12/retrieval-contract.md` and keeps uncalibrated raw scores separate.
 
 An optional reranker operates only on a bounded fused set. It is disabled by default. A model-based
 reranker must use the existing Model Gateway and a declared Runtime/application budget; it may not
@@ -204,11 +232,18 @@ ownership. No second RAG agent loop is added.
 
 ### 11. High-risk ordering
 
-Risk classification and durable report/notification intent are completed before knowledge retrieval.
-Retrieval is never a prerequisite for preserving or dispatching a HIGH-risk fact. A backend failure
-cannot lower the risk classification or remove the trusted safety policy. The fallback gives only
-trusted, statically configured general safety guidance; it never invents campus contact details.
-Failure reason and generation/backend identity are auditable without logging sensitive content.
+P12.1H applies this rule immediately to both `ChatMigrationFacade` and legacy `ChatService` rather
+than deferring it to P12.5. Classification and assessment determine authoritative risk;
+`ToolOrchestrationService.persistReportWithNotificationIntents` atomically persists the report,
+AlertRecord, and notification intent and returns only after the transactional proxy commits. Optional
+legacy RAG begins afterward.
+
+Retrieval is never a prerequisite for preserving or dispatching a HIGH-risk fact. Only explicitly
+classified timeout, backend-unavailable, or transient data-access failures degrade HIGH-risk
+retrieval to empty evidence with a safe reason code. Authentication/authorization, integrity,
+validation, and unexpected programming failures still propagate. No failure can lower risk or remove
+trusted safety policy. The fallback gives only trusted, statically configured general guidance; it
+never invents campus contact details. Logs contain reason codes, not student input.
 
 ### 12. Evaluation
 
