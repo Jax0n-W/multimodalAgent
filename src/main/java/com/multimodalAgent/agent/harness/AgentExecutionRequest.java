@@ -22,7 +22,8 @@ public record AgentExecutionRequest(
         CancellationContext cancellationContext,
         List<AgentRuntimeContextContributor> runtimeContextContributors,
         List<AgentMessage> trustedBusinessContext,
-        List<UntrustedEvidence> untrustedEvidence
+        List<UntrustedEvidence> untrustedEvidence,
+        boolean skillContextAllowed
 ) {
 
     public AgentExecutionRequest {
@@ -64,12 +65,30 @@ public record AgentExecutionRequest(
             String contextSnapshotId,
             CancellationContext cancellationContext,
             List<AgentRuntimeContextContributor> runtimeContextContributors,
+            List<AgentMessage> trustedBusinessContext,
+            List<UntrustedEvidence> untrustedEvidence
+    ) {
+        this(
+                runSpec, requestId, userId, runtimeConfigSnapshotId, contextSnapshotId,
+                cancellationContext, runtimeContextContributors, trustedBusinessContext,
+                untrustedEvidence, true
+        );
+    }
+
+    public AgentExecutionRequest(
+            AgentRunSpec runSpec,
+            String requestId,
+            Long userId,
+            String runtimeConfigSnapshotId,
+            String contextSnapshotId,
+            CancellationContext cancellationContext,
+            List<AgentRuntimeContextContributor> runtimeContextContributors,
             List<AgentMessage> trustedBusinessContext
     ) {
         this(
                 runSpec, requestId, userId, runtimeConfigSnapshotId, contextSnapshotId,
                 cancellationContext, runtimeContextContributors, trustedBusinessContext,
-                List.of()
+                List.of(), true
         );
     }
 
@@ -84,7 +103,8 @@ public record AgentExecutionRequest(
     ) {
         this(
                 runSpec, requestId, userId, runtimeConfigSnapshotId, contextSnapshotId,
-                cancellationContext, runtimeContextContributors, List.of(), List.of()
+                cancellationContext, runtimeContextContributors, List.of(), List.of(),
+                true
         );
     }
 
@@ -104,7 +124,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 List.of(),
                 List.of(),
-                List.of()
+                List.of(),
+                true
         );
     }
 
@@ -125,7 +146,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 runtimeContextContributors,
                 List.of(),
-                List.of()
+                List.of(),
+                true
         );
     }
 
@@ -146,7 +168,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 List.of(),
                 List.of(),
-                List.of()
+                List.of(),
+                true
         );
     }
 
@@ -170,7 +193,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 contributors,
                 trustedBusinessContext,
-                untrustedEvidence
+                untrustedEvidence,
+                skillContextAllowed
         );
     }
 
@@ -184,7 +208,8 @@ public record AgentExecutionRequest(
                 Objects.requireNonNull(context, "context must not be null"),
                 runtimeContextContributors,
                 trustedBusinessContext,
-                untrustedEvidence
+                untrustedEvidence,
+                skillContextAllowed
         );
     }
 
@@ -201,7 +226,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 runtimeContextContributors,
                 trustedBusinessContext,
-                untrustedEvidence
+                untrustedEvidence,
+                skillContextAllowed
         );
     }
 
@@ -218,7 +244,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 runtimeContextContributors,
                 trustedBusinessContext,
-                untrustedEvidence
+                untrustedEvidence,
+                skillContextAllowed
         );
     }
 
@@ -232,7 +259,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 runtimeContextContributors,
                 trustedBusinessContext,
-                untrustedEvidence
+                untrustedEvidence,
+                skillContextAllowed
         );
     }
 
@@ -246,7 +274,8 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 runtimeContextContributors,
                 messages,
-                untrustedEvidence
+                untrustedEvidence,
+                skillContextAllowed
         );
     }
 
@@ -260,7 +289,23 @@ public record AgentExecutionRequest(
                 cancellationContext,
                 runtimeContextContributors,
                 trustedBusinessContext,
-                evidence
+                evidence,
+                skillContextAllowed
+        );
+    }
+
+    public AgentExecutionRequest withSkillContextAllowed(boolean allowed) {
+        return new AgentExecutionRequest(
+                runSpec,
+                requestId,
+                userId,
+                runtimeConfigSnapshotId,
+                contextSnapshotId,
+                cancellationContext,
+                runtimeContextContributors,
+                trustedBusinessContext,
+                untrustedEvidence,
+                allowed
         );
     }
 

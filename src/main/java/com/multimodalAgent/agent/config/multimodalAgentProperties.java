@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.time.Duration;
 import java.math.BigDecimal;
+import com.multimodalAgent.agent.service.knowledge.KnowledgeRetrievalMode;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "multimodal-agent")
@@ -410,6 +411,15 @@ public class multimodalAgentProperties {
         private String chromaCollection = "multimodalAgent_knowledge";
         private int chunkSize = 512;
         private int chunkOverlap = 64;
+        /** Enables the bounded database-backed P12 Hybrid RAG MVP. */
+        private boolean hybridMvpEnabled = true;
+        private KnowledgeRetrievalMode retrievalMode = KnowledgeRetrievalMode.HYBRID_RRF;
+        /** Hard upper bound for the shared public MVP index. */
+        private int maxIndexChunks = 2000;
+        /** Rejects accidentally oversized or incompatible embedding payloads. */
+        private int maxEmbeddingDimensions = 3072;
+        /** Zero means infer the dimension from the configured model response. */
+        private int embeddingDimensions;
 
         public int getTopK() {
             return topK;
@@ -457,6 +467,59 @@ public class multimodalAgentProperties {
 
         public void setChunkOverlap(int chunkOverlap) {
             this.chunkOverlap = chunkOverlap;
+        }
+
+        public boolean isHybridMvpEnabled() {
+            return hybridMvpEnabled;
+        }
+
+        public void setHybridMvpEnabled(boolean hybridMvpEnabled) {
+            this.hybridMvpEnabled = hybridMvpEnabled;
+        }
+
+        public KnowledgeRetrievalMode getRetrievalMode() {
+            return retrievalMode;
+        }
+
+        public void setRetrievalMode(KnowledgeRetrievalMode retrievalMode) {
+            this.retrievalMode = retrievalMode;
+        }
+
+        public int getMaxIndexChunks() {
+            return maxIndexChunks;
+        }
+
+        public void setMaxIndexChunks(int maxIndexChunks) {
+            if (maxIndexChunks <= 0) {
+                throw new IllegalArgumentException("knowledge.max-index-chunks must be positive");
+            }
+            this.maxIndexChunks = maxIndexChunks;
+        }
+
+        public int getMaxEmbeddingDimensions() {
+            return maxEmbeddingDimensions;
+        }
+
+        public void setMaxEmbeddingDimensions(int maxEmbeddingDimensions) {
+            if (maxEmbeddingDimensions <= 0) {
+                throw new IllegalArgumentException(
+                        "knowledge.max-embedding-dimensions must be positive"
+                );
+            }
+            this.maxEmbeddingDimensions = maxEmbeddingDimensions;
+        }
+
+        public int getEmbeddingDimensions() {
+            return embeddingDimensions;
+        }
+
+        public void setEmbeddingDimensions(int embeddingDimensions) {
+            if (embeddingDimensions < 0) {
+                throw new IllegalArgumentException(
+                        "knowledge.embedding-dimensions must not be negative"
+                );
+            }
+            this.embeddingDimensions = embeddingDimensions;
         }
     }
 

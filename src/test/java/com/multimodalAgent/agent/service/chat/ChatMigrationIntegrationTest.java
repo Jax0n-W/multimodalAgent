@@ -26,6 +26,8 @@ import com.multimodalAgent.agent.service.PsychologyAssessment;
 import com.multimodalAgent.agent.service.ai.AiClient;
 import com.multimodalAgent.agent.service.knowledge.AgenticRagResult;
 import com.multimodalAgent.agent.service.knowledge.AgenticRagService;
+import com.multimodalAgent.agent.service.knowledge.KnowledgeRetrievalStatus;
+import com.multimodalAgent.agent.service.knowledge.SearchResult;
 import com.multimodalAgent.agent.service.mcp.AlertNotifier;
 import com.multimodalAgent.agent.service.mcp.ExcelReportWriter;
 import com.multimodalAgent.agent.service.multimodal.MultimodalAnalysis;
@@ -153,6 +155,37 @@ class ChatMigrationIntegrationTest {
     }
 
     @Test
+    void consultEvidenceIsFrozenIntoTheModelContextAsUntrustedData() throws Exception {
+        when(ragService.retrieve(anyString(), anyList())).thenReturn(new AgenticRagResult(
+                "校园知识检索",
+                List.of("考试压力支持"),
+                List.of(new SearchResult(
+                        42L,
+                        "academic.md",
+                        "把复习任务拆成小步骤，并向学习支持中心求助。",
+                        1.0
+                )),
+                "证据充分",
+                true,
+                KnowledgeRetrievalStatus.HYBRID
+        ));
+        when(provider.stream(any())).thenReturn(response("可以先拆分复习任务"));
+
+        List<ChatStreamEvent> events = postChat(null, "最近考试压力很大，怎么安排复习？");
+
+        assertEquals("done", events.get(events.size() - 1).type());
+        AgentRunEntity run = runs.findBySessionIdOrderByCreatedAtDesc(
+                events.get(0).sessionId()
+        ).get(0);
+        String context = snapshots.findById(run.getContextSnapshotId())
+                .orElseThrow().getContextJson();
+        assertTrue(context.contains("UNTRUSTED_EVIDENCE_DATA_V1"));
+        assertTrue(context.contains("academic.md"));
+        assertTrue(context.contains("把复习任务拆成小步骤"));
+        assertTrue(context.contains("HYBRID"));
+    }
+
+    @Test
     void multimodalHighRiskCannotBeDowngradedByRetrievalFailure() {
         doThrow(new QueryTimeoutException("knowledge timeout"))
                 .when(ragService).retrieve(anyString(), anyList());
@@ -174,6 +207,31 @@ class ChatMigrationIntegrationTest {
                 .findFirst().orElseThrow();
         assertEquals(RiskLevel.HIGH, report.getRiskLevel());
         assertEquals(1, notificationIntents.findByReportId(report.getId()).size());
+    }
+
+    @Test
+    void multimodalHighRiskSuppressesMatchingOrdinarySkillByTrustedDecision() {
+        when(provider.stream(any())).thenReturn(response("多模态安全支持"));
+        UserAccount student = users.findByUsername("student").orElseThrow();
+        MultimodalAnalysis highRisk = analysis(
+                "audio", EmotionLabel.HIGH_RISK, RiskLevel.HIGH, "urgent safety signal"
+        );
+
+        List<ChatStreamEvent> events = chatService.streamMultimodal(
+                        student.getId(), new ChatRequest(null, "我最近睡不着"), highRisk
+                ).map(org.springframework.http.codec.ServerSentEvent::data)
+                .collectList().block(Duration.ofSeconds(20));
+
+        assertNotNull(events);
+        assertEquals("done", events.get(events.size() - 1).type());
+        AgentRunEntity run = runs.findBySessionIdOrderByCreatedAtDesc(
+                events.get(0).sessionId()
+        ).get(0);
+        String context = snapshots.findById(run.getContextSnapshotId())
+                .orElseThrow().getContextJson();
+        assertTrue(context.contains("Safety level: HIGH"));
+        assertFalse(context.contains("Trusted Skill:"));
+        assertTrue(context.contains("我最近睡不着"));
     }
 
     @Test

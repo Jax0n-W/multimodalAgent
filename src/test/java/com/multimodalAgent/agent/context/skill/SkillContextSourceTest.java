@@ -74,6 +74,28 @@ class SkillContextSourceTest {
     }
 
     @Test
+    void serverSafetyDecisionSuppressesOrdinarySkillWithoutInspectingPromptText() {
+        AtomicInteger resolutions = new AtomicInteger();
+        SkillContextSource source = new SkillContextSource(input -> {
+            resolutions.incrementAndGet();
+            return Optional.of(skill("sleep-guidance", "1", "TRUSTED", Set.of()));
+        });
+        ContextAssemblyInput highRiskInput = new ContextAssemblyInput(
+                "run", "session", 1L, List.of(AgentMessage.user("最近睡不着")),
+                Set.of(), List.of(), List.of(), false
+        );
+
+        AgentContextSnapshot snapshot = assembler(List.of(
+                source,
+                new RequestMessageContextSource()
+        )).assemble(highRiskInput);
+
+        assertEquals(0, resolutions.get());
+        assertEquals(List.of(AgentMessage.user("最近睡不着")), snapshot.messages());
+        assertEquals(0, snapshot.orderedContributions().get(0).messageCount());
+    }
+
+    @Test
     void skillMemoryAndRequestHaveStableLexicalOrderAtTheSameExplicitOrder() {
         SkillDefinition skill = skill("sleep-guidance", "1", "TRUSTED", Set.of());
         ConversationMemorySource memory = new ConversationMemorySource(

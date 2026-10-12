@@ -16,7 +16,8 @@ public record ContextAssemblyInput(
         List<AgentMessage> requestMessages,
         Set<String> allowedTools,
         List<AgentMessage> trustedBusinessContext,
-        List<UntrustedEvidence> untrustedEvidence
+        List<UntrustedEvidence> untrustedEvidence,
+        boolean skillContextAllowed
 ) {
 
     public ContextAssemblyInput {
@@ -72,11 +73,26 @@ public record ContextAssemblyInput(
             Long userId,
             List<AgentMessage> requestMessages,
             Set<String> allowedTools,
+            List<AgentMessage> trustedBusinessContext,
+            List<UntrustedEvidence> untrustedEvidence
+    ) {
+        this(
+                runId, sessionId, userId, requestMessages, allowedTools,
+                trustedBusinessContext, untrustedEvidence, true
+        );
+    }
+
+    public ContextAssemblyInput(
+            String runId,
+            String sessionId,
+            Long userId,
+            List<AgentMessage> requestMessages,
+            Set<String> allowedTools,
             List<AgentMessage> trustedBusinessContext
     ) {
         this(
                 runId, sessionId, userId, requestMessages, allowedTools,
-                trustedBusinessContext, List.of()
+                trustedBusinessContext, List.of(), true
         );
     }
 
@@ -87,7 +103,10 @@ public record ContextAssemblyInput(
             List<AgentMessage> requestMessages,
             Set<String> allowedTools
     ) {
-        this(runId, sessionId, userId, requestMessages, allowedTools, List.of(), List.of());
+        this(
+                runId, sessionId, userId, requestMessages, allowedTools,
+                List.of(), List.of(), true
+        );
     }
 
     public ContextAssemblyInput(
@@ -96,7 +115,10 @@ public record ContextAssemblyInput(
             Long userId,
             List<AgentMessage> requestMessages
     ) {
-        this(runId, sessionId, userId, requestMessages, Set.of(), List.of(), List.of());
+        this(
+                runId, sessionId, userId, requestMessages, Set.of(),
+                List.of(), List.of(), true
+        );
     }
 
     private static void requireText(String value, String field) {

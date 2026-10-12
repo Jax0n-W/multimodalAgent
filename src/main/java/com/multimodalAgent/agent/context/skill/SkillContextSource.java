@@ -40,6 +40,9 @@ public final class SkillContextSource implements ContextSource {
     @Override
     public ContextContribution load(ContextAssemblyInput input) {
         Objects.requireNonNull(input, "input must not be null");
+        if (!input.skillContextAllowed()) {
+            return new ContextContribution(List.of());
+        }
         Optional<SkillDefinition> selected = resolver.resolve(input);
         if (selected.isEmpty()) {
             return new ContextContribution(List.of());

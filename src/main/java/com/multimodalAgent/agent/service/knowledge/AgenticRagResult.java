@@ -10,18 +10,38 @@ public record AgenticRagResult(
         List<String> queries,
         List<SearchResult> evidence,
         String review,
-        boolean sufficient
+        boolean sufficient,
+        KnowledgeRetrievalStatus retrievalStatus
 ) {
+    public AgenticRagResult(
+            String plan,
+            List<String> queries,
+            List<SearchResult> evidence,
+            String review,
+            boolean sufficient
+    ) {
+        this(
+                plan, queries, evidence, review, sufficient,
+                evidence.isEmpty()
+                        ? KnowledgeRetrievalStatus.NO_EVIDENCE
+                        : KnowledgeRetrievalStatus.LEGACY_FALLBACK
+        );
+    }
+
     public static AgenticRagResult empty() {
-        return new AgenticRagResult("未触发 RAG", List.of(), List.of(), "无", false);
+        return new AgenticRagResult(
+                "未触发 RAG", List.of(), List.of(), "无", false,
+                KnowledgeRetrievalStatus.NO_EVIDENCE
+        );
     }
 
     public String contextBlock() {
         if (evidence.isEmpty()) {
             return """
                     Agentic RAG 计划：%s
+                    检索状态：%s
                     Agentic RAG 复核：未检索到足够知识。回答时必须说明知识库不足，并给出安全、通用建议。
-                    """.formatted(plan);
+                    """.formatted(plan, retrievalStatus);
         }
         String evidenceText = String.join("\n\n", evidence.stream()
                 .map(result -> "- [" + result.source() + " | score %.3f] %s"
@@ -29,10 +49,13 @@ public record AgenticRagResult(
                 .toList());
         return """
                 Agentic RAG 计划：%s
+                检索状态：%s
                 Agentic RAG 查询：%s
                 Agentic RAG 复核：%s
                 检索知识：
                 %s
-                """.formatted(plan, String.join("；", queries), review, evidenceText);
+                """.formatted(
+                        plan, retrievalStatus, String.join("；", queries), review, evidenceText
+                );
     }
 }

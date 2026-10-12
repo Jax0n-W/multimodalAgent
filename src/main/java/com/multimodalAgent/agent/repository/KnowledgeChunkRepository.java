@@ -11,6 +11,8 @@ public interface KnowledgeChunkRepository extends JpaRepository<KnowledgeChunk, 
 
     List<KnowledgeChunk> findTop20BySourceOrderByCreatedAtDesc(String source);
 
+    long countBySource(String source);
+
     /** 检索命中后取相邻切块，用于补齐上下文。 */
     List<KnowledgeChunk> findBySourceAndSourceIndexBetweenOrderBySourceIndexAsc(
             String source,

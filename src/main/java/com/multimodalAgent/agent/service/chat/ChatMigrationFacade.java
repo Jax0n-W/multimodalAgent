@@ -172,7 +172,8 @@ public class ChatMigrationFacade {
                 spec,
                 "chat-request-" + compactUuid(),
                 userId
-        ).withTrustedBusinessContext(List.of(AgentMessage.system(
+        ).withSkillContextAllowed(risk != RiskLevel.HIGH)
+                .withTrustedBusinessContext(List.of(AgentMessage.system(
                 trustedBusinessContext(intent, risk)
         ))).withUntrustedEvidence(untrustedEvidence(rag, multimodal));
         return new PreparedRuntimeChat(userId, session.getPublicId(), runId, executionRequest);

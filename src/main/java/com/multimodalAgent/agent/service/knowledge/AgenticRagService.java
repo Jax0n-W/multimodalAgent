@@ -43,15 +43,23 @@ public class AgenticRagService {
 
     public AgenticRagResult retrieve(String userInput, List<AiMessage> history) {
         RagPlan plan = plan(userInput, history);
-        List<SearchResult> evidence = search(plan.queries(), properties.getKnowledge().getTopK());
+        SearchBatch batch = search(plan.queries(), properties.getKnowledge().getTopK());
+        List<SearchResult> evidence = batch.evidence();
         RagReview review = review(userInput, evidence);
         if (!review.sufficient()) {
             List<SearchResult> expanded = new ArrayList<>(evidence);
-            expanded.addAll(search(review.followUpQueries(), properties.getKnowledge().getTopK()));
+            SearchBatch followUp = search(
+                    review.followUpQueries(), properties.getKnowledge().getTopK()
+            );
+            expanded.addAll(followUp.evidence());
             evidence = dedupe(expanded, properties.getKnowledge().getTopK());
+            batch = new SearchBatch(evidence, combineStatus(batch.status(), followUp.status()));
             review = review(userInput, evidence);
         }
-        return new AgenticRagResult(plan.reason(), plan.queries(), evidence, review.reason(), review.sufficient());
+        return new AgenticRagResult(
+                plan.reason(), plan.queries(), evidence, review.reason(), review.sufficient(),
+                batch.status()
+        );
     }
 
     private RagPlan plan(String userInput, List<AiMessage> history) {
@@ -83,14 +91,48 @@ public class AgenticRagService {
         }
     }
 
-    private List<SearchResult> search(List<String> queries, int topK) {
+    private SearchBatch search(List<String> queries, int topK) {
         List<SearchResult> merged = new ArrayList<>();
+        KnowledgeRetrievalStatus status = KnowledgeRetrievalStatus.NO_EVIDENCE;
         for (String query : queries) {
             if (query != null && !query.isBlank()) {
-                merged.addAll(knowledgeService.retrieve(query, topK));
+                KnowledgeRetrievalResult result = knowledgeService.retrieveWithStatus(query, topK);
+                merged.addAll(result.results());
+                status = combineStatus(status, result.status());
             }
         }
-        return dedupe(merged, topK);
+        return new SearchBatch(dedupe(merged, topK), status);
+    }
+
+    private KnowledgeRetrievalStatus combineStatus(
+            KnowledgeRetrievalStatus left,
+            KnowledgeRetrievalStatus right
+    ) {
+        if (left == KnowledgeRetrievalStatus.LEXICAL_ONLY_DEGRADED
+                || right == KnowledgeRetrievalStatus.LEXICAL_ONLY_DEGRADED) {
+            return KnowledgeRetrievalStatus.LEXICAL_ONLY_DEGRADED;
+        }
+        if (left == KnowledgeRetrievalStatus.DENSE_UNAVAILABLE
+                || right == KnowledgeRetrievalStatus.DENSE_UNAVAILABLE) {
+            return KnowledgeRetrievalStatus.DENSE_UNAVAILABLE;
+        }
+        if (left == KnowledgeRetrievalStatus.HYBRID
+                || right == KnowledgeRetrievalStatus.HYBRID) {
+            return KnowledgeRetrievalStatus.HYBRID;
+        }
+        if (left == KnowledgeRetrievalStatus.DENSE_ONLY
+                || right == KnowledgeRetrievalStatus.DENSE_ONLY) {
+            return KnowledgeRetrievalStatus.DENSE_ONLY;
+        }
+        if (left == KnowledgeRetrievalStatus.BM25_ONLY
+                || right == KnowledgeRetrievalStatus.BM25_ONLY) {
+            return KnowledgeRetrievalStatus.BM25_ONLY;
+        }
+        if (left == KnowledgeRetrievalStatus.LEGACY_FALLBACK
+                || right == KnowledgeRetrievalStatus.LEGACY_FALLBACK) {
+            return KnowledgeRetrievalStatus.LEGACY_FALLBACK;
+        }
+        return KnowledgeRetrievalStatus.NO_EVIDENCE;
     }
 
     private List<SearchResult> dedupe(List<SearchResult> results, int topK) {
@@ -138,5 +180,14 @@ public class AgenticRagService {
     }
 
     private record RagReview(boolean sufficient, String reason, List<String> followUpQueries) {
+    }
+
+    private record SearchBatch(
+            List<SearchResult> evidence,
+            KnowledgeRetrievalStatus status
+    ) {
+        private SearchBatch {
+            evidence = List.copyOf(evidence);
+        }
     }
 }
