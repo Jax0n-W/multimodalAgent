@@ -35,12 +35,12 @@ public class ChatController {
     public ChatController(ChatService chatService, MultimodalInputService multimodalInputService) {
         this.chatService = chatService;
         this.multimodalInputService = multimodalInputService;
-    }
+    }// 构造器注入
 
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<ChatStreamEvent>> stream(
-            @AuthenticationPrincipal CurrentUser currentUser,
-            @Valid @RequestBody ChatRequest request
+            @AuthenticationPrincipal CurrentUser currentUser,  // 获取当前登录用户
+            @Valid @RequestBody ChatRequest request  // 校验规则
     ) {
         rejectAdmin(currentUser);
         return chatService.streamChat(currentUser.getId(), request);
@@ -56,8 +56,8 @@ public class ChatController {
             @RequestPart(value = "video", required = false) Mono<FilePart> video
     ) {
         rejectAdmin(currentUser);
-        boolean hasText = message != null && !message.isBlank();
-        boolean hasAnyFile = audio != null || image != null || video != null;
+        boolean hasText = message != null && !message.isBlank(); // 检查是否有文字输入
+        boolean hasAnyFile = audio != null || image != null || video != null; // 检查是否有文件上传
         if (!hasText && !hasAnyFile) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请至少输入文字或上传一个多模态文件。");
         }

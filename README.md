@@ -57,15 +57,17 @@ Important trust and ordering rules:
 - MySQL 8, Redis 7 and Flyway migrations
 - Unified durable Agent Runtime with budgets, Tool Registry, policy engine and event stream
 - Configuration/context snapshots, leases, checkpoints and startup Recovery
-- BM25, persisted dense cosine retrieval and exact Reciprocal Rank Fusion (`k=60`)
+- Jieba BM25, Spring AI/Ollama dense cosine retrieval, exact RRF (`k=60`) and optional reranking
 - SSE streaming, Testcontainers, JUnit 5 and Maven
 
 ## Quick Start — verified Docker demo
 
 Prerequisites: Docker Desktop, Java 17/Maven for tests, and Ollama listening on
-`127.0.0.1:11434` with `mindbridge-qwen2.5-7b-ft:latest` registered.
+`127.0.0.1:11434` with the chat and embedding models registered.
 
 ```powershell
+ollama pull bge-m3
+# Register or pull the project's chat model as mindbridge-qwen2.5-7b.
 ollama list
 docker compose up -d --build mysql redis app
 docker compose ps
@@ -103,7 +105,8 @@ On a Unix-like shell, `./scripts/run-dev.sh` verifies/starts Ollama and launches
 - `RAG_RETRIEVAL_MODE=HYBRID_RRF`
 - `USE_CHROMA=false`
 - `AI_PROVIDER=ollama`
-- `OLLAMA_MODEL=mindbridge-qwen2.5-7b-ft:latest`
+- `OLLAMA_MODEL=mindbridge-qwen2.5-7b`
+- `OLLAMA_EMBEDDING_MODEL=bge-m3`
 
 Environment variables override each value. See [the demo guide](docs/p13/demo-guide.md) for manual
 Windows startup, rollback and troubleshooting.
@@ -168,14 +171,31 @@ curl.exe -u admin:admin123 -H "Content-Type: application/json" `
 Student conversations and private memory are not inserted into the shared index. Three independently
 tested modes are available through `RAG_RETRIEVAL_MODE`:
 
-- `BM25_ONLY`: NFKC normalization, Chinese Han unigram/bigram tokens, BM25 `k1=1.2`, `b=0.75`.
-- `DENSE_ONLY`: cosine ranking over persisted, model/dimension-bound embeddings.
-- `HYBRID_RRF`: exact `sum(1/(60+rank))`, stable tie-breaking and deduplication.
+- `BM25_ONLY`: Jieba search-mode segmentation with NFKC/OOV backoff, BM25 `k1=1.2`, `b=0.75`.
+- `DENSE_ONLY`: real Spring AI `OllamaEmbeddingModel` vectors persisted with model/dimension
+  provenance, then ranked by cosine similarity.
+- `HYBRID_RRF`: BM25 and dense recall execute concurrently, followed by exact
+  `sum(1/(60+rank))`, stable tie-breaking, deduplication and a post-RRF reranking boundary.
 
-Without an embedding API key, the demo cannot create/query real dense vectors. Hybrid requests then
-report `LEXICAL_ONLY_DEGRADED`; this is expected and is not presented as Hybrid success. The 30-case
-offline benchmark uses deterministic fixture embeddings. The real-model demonstration uses the local
-LLM plus fixture embeddings; neither result is a real-embedding benchmark.
+The default dense model is local `bge-m3`; `qwen3-embedding-0.6b` can be selected with
+`OLLAMA_EMBEDDING_MODEL`. Existing null, fixture, or previous-model vectors are backfilled at startup.
+If Ollama is unavailable, the request returns real BM25 results with status
+`LEXICAL_ONLY_DEGRADED`; no vector is fabricated and the exception does not escape the retrieval
+boundary. The marker is emitted as an Observation, structured warning, and the
+`knowledge.retrieval.degraded` counter (inspect it under `/actuator/metrics`).
+
+An optional local model reranker is wired after RRF. It is disabled by default so it cannot become a
+new availability dependency. Enable it only after installing an Ollama model that can return strict
+query-document relevance scores:
+
+```powershell
+$env:RAG_RERANK_ENABLED="true"
+$env:OLLAMA_RERANK_MODEL="<your-local-reranker-model>"
+```
+
+If reranking fails or returns malformed/incomplete scores, the service truthfully reports a rerank
+fallback metric and preserves the deterministic RRF order. The offline benchmark still uses
+deterministic embedding fixtures for repeatable tests; normal application ingestion uses Ollama.
 
 To reproduce the legacy rollback path:
 

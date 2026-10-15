@@ -11,7 +11,8 @@ fi
 OLLAMA_BIN="${OLLAMA_BIN:-$DEFAULT_OLLAMA_BIN}"
 OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-mindbridge-qwen2.5-7b-ft:latest}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-mindbridge-qwen2.5-7b}"
+OLLAMA_EMBEDDING_MODEL="${OLLAMA_EMBEDDING_MODEL:-bge-m3}"
 if [ -z "${JAVA_HOME:-}" ] && [ -d "$ROOT_DIR/.tools/amazon-corretto-17.jdk/Contents/Home" ]; then
   export JAVA_HOME="$ROOT_DIR/.tools/amazon-corretto-17.jdk/Contents/Home"
 fi
@@ -54,7 +55,7 @@ if ! curl -fsS "$OLLAMA_BASE_URL/api/tags" >/dev/null 2>&1; then
 fi
 
 if ! "$OLLAMA_BIN" list | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; then
-  if { [ "$OLLAMA_MODEL" = "mindbridge-qwen2.5-7b-ft:latest" ] || [ "$OLLAMA_MODEL" = "multimodalAgent-qwen2.5-7b-ft:latest" ]; } \
+  if { [ "$OLLAMA_MODEL" = "mindbridge-qwen2.5-7b" ] || [ "$OLLAMA_MODEL" = "mindbridge-qwen2.5-7b-ft:latest" ] || [ "$OLLAMA_MODEL" = "multimodalAgent-qwen2.5-7b-ft:latest" ]; } \
       && [ -f "$ROOT_DIR/models/multimodalAgent-qwen2.5-7b-ft/Modelfile" ]; then
     echo "Creating $OLLAMA_MODEL from models/multimodalAgent-qwen2.5-7b-ft/Modelfile ..."
     "$OLLAMA_BIN" create "$OLLAMA_MODEL" -f "$ROOT_DIR/models/multimodalAgent-qwen2.5-7b-ft/Modelfile"
@@ -64,9 +65,15 @@ if ! "$OLLAMA_BIN" list | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_MODEL"; th
   fi
 fi
 
+if ! "$OLLAMA_BIN" list | awk 'NR > 1 {print $1}' | grep -qx "$OLLAMA_EMBEDDING_MODEL"; then
+  echo "Pulling embedding model $OLLAMA_EMBEDDING_MODEL ..."
+  "$OLLAMA_BIN" pull "$OLLAMA_EMBEDDING_MODEL"
+fi
+
 AI_PROVIDER=ollama \
 OLLAMA_BASE_URL="$OLLAMA_BASE_URL" \
 OLLAMA_MODEL="$OLLAMA_MODEL" \
+OLLAMA_EMBEDDING_MODEL="$OLLAMA_EMBEDDING_MODEL" \
 AGENT_RUNTIME_ENABLED="${AGENT_RUNTIME_ENABLED:-true}" \
 AGENT_CHAT_MIGRATION_ENABLED="${AGENT_CHAT_MIGRATION_ENABLED:-true}" \
 AGENT_MEMORY_ENABLED="${AGENT_MEMORY_ENABLED:-true}" \

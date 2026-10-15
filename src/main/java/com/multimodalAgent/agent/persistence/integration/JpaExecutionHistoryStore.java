@@ -338,7 +338,7 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
         execution.setCompletedAt(event.occurredAt());
         execution.setErrorCode(event.errorCode().name());
         toolExecutionRepository.saveAndFlush(execution);
-        updateRunProgress(run, event.iteration(), AgentRunPhase.FINALIZING);
+        updateRunProgress(run, event.iteration(), AgentRunPhase.AWAITING_TOOL);
     }
 
     private void recordBudgetBlocked(AgentRunEntity run, BudgetBlockedEvent event) {
@@ -358,7 +358,7 @@ public class JpaExecutionHistoryStore implements ExecutionHistoryStore {
             AgentEvent event
     ) {
         markNonExecuted(event.runId(), toolCallId, event.occurredAt(), errorCode.name());
-        updateRunProgress(run, event.iteration(), AgentRunPhase.FINALIZING);
+        updateRunProgress(run, event.iteration(), AgentRunPhase.AWAITING_TOOL);
     }
 
     private void markNonExecuted(

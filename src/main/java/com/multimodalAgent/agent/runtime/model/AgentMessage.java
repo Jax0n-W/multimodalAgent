@@ -16,6 +16,15 @@ public record AgentMessage(
         content = content == null ? "" : content;
         toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
 
+        if (role == AgentMessageRole.SYSTEM
+                && content.stripLeading().startsWith(
+                        UntrustedEvidenceProtocol.ENVELOPE_PREFIX.stripTrailing()
+                )) {
+            throw new IllegalArgumentException(
+                    "Untrusted evidence must never be represented as a SYSTEM message"
+            );
+        }
+
         if (role == AgentMessageRole.TOOL
                 && (toolCallId == null || toolCallId.isBlank() || toolName == null || toolName.isBlank())) {
             throw new IllegalArgumentException("Tool messages require toolCallId and toolName");

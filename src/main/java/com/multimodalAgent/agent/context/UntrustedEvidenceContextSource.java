@@ -3,6 +3,7 @@ package com.multimodalAgent.agent.context;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.runtime.model.AgentMessage;
+import com.multimodalAgent.agent.runtime.model.UntrustedEvidenceProtocol;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -16,7 +17,7 @@ public final class UntrustedEvidenceContextSource implements ContextSource {
     public static final String SOURCE_ID = "chat-untrusted-evidence";
     public static final String SOURCE_VERSION = "1";
     public static final int ORDER = 0;
-    public static final String ENVELOPE_PREFIX = "UNTRUSTED_EVIDENCE_DATA_V1\n";
+    public static final String ENVELOPE_PREFIX = UntrustedEvidenceProtocol.ENVELOPE_PREFIX;
 
     private final ObjectMapper objectMapper;
 

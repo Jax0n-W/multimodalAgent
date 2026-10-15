@@ -24,17 +24,21 @@ public class KnowledgeIngestionService {
     }
 
     public void ingestClasspathKnowledgeIfEmpty() {
-        if (knowledgeChunkRepository.count() > 0) {
-            return;
-        }
         try {
-            // classpath*: 支持未来从多个 jar 或目录中合并加载知识文件。
-            PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-            Resource[] resources = resolver.getResources("classpath*:knowledge/*.*");
-            for (Resource resource : resources) {
-                String content = StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-                knowledgeService.ingest(resource.getFilename(), content);
+            if (knowledgeChunkRepository.count() == 0) {
+                // classpath*: 支持未来从多个 jar 或目录中合并加载知识文件。
+                PathMatchingResourcePatternResolver resolver =
+                        new PathMatchingResourcePatternResolver();
+                Resource[] resources = resolver.getResources("classpath*:knowledge/*.*");
+                for (Resource resource : resources) {
+                    String content = StreamUtils.copyToString(
+                            resource.getInputStream(), StandardCharsets.UTF_8
+                    );
+                    knowledgeService.ingest(resource.getFilename(), content);
+                }
             }
+            // Upgrades null, fixture, or previous-model vectors to the configured local model.
+            knowledgeService.backfillEmbeddings();
         } catch (Exception exception) {
             throw new IllegalStateException("Failed to load bundled knowledge base", exception);
         }

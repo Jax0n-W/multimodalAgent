@@ -57,6 +57,7 @@ import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointRuntimeM
 import com.multimodalAgent.agent.recovery.integration.RecoveryCheckpointingAgentExecutionCoordinator;
 import com.multimodalAgent.agent.recovery.integration.ToolRecoveryContractBindingMiddleware;
 import com.multimodalAgent.agent.runtime.AgentRunResult;
+import com.multimodalAgent.agent.runtime.AgentLoopPolicy;
 import com.multimodalAgent.agent.runtime.AgentRunner;
 import com.multimodalAgent.agent.runtime.budget.ExecutionBudget;
 import com.multimodalAgent.agent.runtime.budget.ModelPricing;
@@ -75,10 +76,17 @@ import com.multimodalAgent.agent.runtime.tool.ToolOutcomeRecorder;
 import com.multimodalAgent.agent.runtime.tool.ToolRegistry;
 import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
 import com.multimodalAgent.agent.service.knowledge.KnowledgeService;
+import com.multimodalAgent.agent.service.CrisisTicketService;
+import com.multimodalAgent.agent.service.ReportService;
 import com.multimodalAgent.agent.streaming.ExecutionStreamHub;
 import com.multimodalAgent.agent.streaming.ExecutionStreamPublisher;
 import com.multimodalAgent.agent.streaming.bridge.AgentEventStreamBridge;
-import com.multimodalAgent.agent.tool.builtin.KnowledgeSearchTool;
+import com.multimodalAgent.agent.repository.ConsultantScheduleSlotRepository;
+import com.multimodalAgent.agent.tool.campus.QueryConsultantScheduleTool;
+import com.multimodalAgent.agent.tool.campus.QueryMyRecentAssessmentsTool;
+import com.multimodalAgent.agent.tool.campus.SearchCampusPolicyTool;
+import com.multimodalAgent.agent.tool.campus.SearchCounselingResourcesTool;
+import com.multimodalAgent.agent.tool.campus.SubmitCrisisTicketTool;
 import jakarta.validation.Validator;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.ApplicationRunner;
@@ -271,6 +279,10 @@ public class StreamingAgentExecutionConfiguration {
             ObjectMapper objectMapper,
             Validator validator,
             KnowledgeService knowledgeService,
+            ConsultantScheduleSlotRepository consultantSchedules,
+            ReportService reportService,
+            CrisisTicketService crisisTicketService,
+            multimodalAgentProperties properties,
             StreamingModelInvocationScope invocationScope,
             ExecutionPersistenceComposition persistence,
             ExecutionStreamHub hub,
@@ -295,8 +307,30 @@ public class StreamingAgentExecutionConfiguration {
             ObjectProvider<RunLeaseStore> leaseStoreProvider,
             ObjectProvider<RunLeaseWatchdogFactory> watchdogFactoryProvider
     ) {
+        multimodalAgentProperties.Tooling toolConfig = properties.getRuntime().getTools();
         ToolExecutor toolExecutor = new ToolExecutor(
-                new ToolRegistry(List.of(new KnowledgeSearchTool(knowledgeService))),
+                new ToolRegistry(List.of(
+                        new SearchCampusPolicyTool(
+                                knowledgeService,
+                                toolConfig.getReadTimeout()
+                        ),
+                        new SearchCounselingResourcesTool(
+                                knowledgeService,
+                                toolConfig.getReadTimeout()
+                        ),
+                        new QueryConsultantScheduleTool(
+                                consultantSchedules,
+                                toolConfig.getReadTimeout()
+                        ),
+                        new QueryMyRecentAssessmentsTool(
+                                reportService,
+                                toolConfig.getReadTimeout()
+                        ),
+                        new SubmitCrisisTicketTool(
+                                crisisTicketService,
+                                toolConfig.getMutationTimeout()
+                        )
+                )),
                 new ToolArgumentResolver(objectMapper, validator),
                 new DefaultToolPolicyEngine(),
                 objectMapper,
@@ -314,7 +348,8 @@ public class StreamingAgentExecutionConfiguration {
                 model,
                 toolExecutor,
                 new SpringAiModelToolDefinitionProjector(objectMapper),
-                combinedPublisher
+                combinedPublisher,
+                AgentLoopPolicy.autonomous()
         );
         List<RuntimeMiddleware> middleware = new ArrayList<>();
         middleware.add(invocationScope);

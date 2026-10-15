@@ -42,7 +42,7 @@ class AgentRuntimeMySqlMigrationTest {
                 .load()
                 .migrate();
 
-        assertEquals(14, result.migrationsExecuted);
+        assertEquals(15, result.migrationsExecuted);
 
         try (Connection connection = MYSQL.createConnection("");
              PreparedStatement statement = connection.prepareStatement("""
@@ -61,13 +61,15 @@ class AgentRuntimeMySqlMigrationTest {
                            'chat_runtime_sessions',
                            'chat_history_projections',
                            'high_risk_notification_intents',
-                           'knowledge_chunks'
+                           'knowledge_chunks',
+                           'consultant_schedule_slots',
+                           'crisis_tickets'
                        )
                      """)) {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(12, resultSet.getInt(1));
+                assertEquals(14, resultSet.getInt(1));
             }
         }
 
@@ -125,6 +127,15 @@ class AgentRuntimeMySqlMigrationTest {
             assertColumns(connection, "knowledge_chunks", List.of(
                     "id", "source", "source_index", "content", "embedding_json", "created_at"
             ));
+            assertColumns(connection, "consultant_schedule_slots", List.of(
+                    "id", "consultant_display_name", "specialty", "start_at", "end_at",
+                    "modality", "location", "available"
+            ));
+            assertColumns(connection, "crisis_tickets", List.of(
+                    "ticket_id", "run_id", "tool_call_id", "session_id", "user_id",
+                    "runtime_config_snapshot_id", "summary", "urgency", "contact_consent",
+                    "preferred_contact", "status", "created_at"
+            ));
             assertColumnType(connection, "knowledge_chunks", "content", "text");
             assertColumnType(connection, "agent_runtime_config_snapshots", "config_json", "longtext");
             assertColumnType(connection, "agent_recovery_checkpoints", "state_json", "longtext");
@@ -155,6 +166,12 @@ class AgentRuntimeMySqlMigrationTest {
                     "high_risk_notification_intents",
                     "uk_high_risk_notification_report_recipient",
                     List.of("report_id", "recipient")
+            );
+            assertUniqueIndex(
+                    connection,
+                    "crisis_tickets",
+                    "uk_crisis_tickets_run_call",
+                    List.of("run_id", "tool_call_id")
             );
             assertForeignKey(
                     connection,

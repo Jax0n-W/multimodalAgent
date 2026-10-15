@@ -3,13 +3,16 @@ package com.multimodalAgent.agent.tool.builtin;
 import com.multimodalAgent.agent.runtime.tool.AgentTool;
 import com.multimodalAgent.agent.runtime.tool.ToolDescriptor;
 import com.multimodalAgent.agent.runtime.tool.ToolRisk;
+import com.multimodalAgent.agent.runtime.tool.UntrustedEvidenceTool;
 import com.multimodalAgent.agent.service.knowledge.KnowledgeService;
 import com.multimodalAgent.agent.service.knowledge.SearchResult;
 
 import java.util.List;
 import java.util.Objects;
 
-public final class KnowledgeSearchTool implements AgentTool<KnowledgeSearchInput, List<SearchResult>> {
+public final class KnowledgeSearchTool implements
+        AgentTool<KnowledgeSearchInput, List<SearchResult>>,
+        UntrustedEvidenceTool {
 
     private static final ToolDescriptor<KnowledgeSearchInput> DESCRIPTOR = new ToolDescriptor<>(
             "knowledge_search",
@@ -35,5 +38,10 @@ public final class KnowledgeSearchTool implements AgentTool<KnowledgeSearchInput
     @Override
     public List<SearchResult> execute(KnowledgeSearchInput input) {
         return knowledgeService.retrieve(input.query(), input.effectiveTopK());
+    }
+
+    @Override
+    public String evidenceKind() {
+        return "knowledge-retrieval";
     }
 }

@@ -32,6 +32,11 @@ import com.multimodalAgent.agent.runtime.tool.policy.ToolPolicyRequest;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public final class ToolExecutor {
 
@@ -40,6 +45,7 @@ public final class ToolExecutor {
     private final ToolPolicyEngine policyEngine;
     private final ObjectMapper objectMapper;
     private final ToolOutcomeRecorder outcomeRecorder;
+    private final ExecutorService executionScheduler;
 
     public ToolExecutor( // 工具执行器
             ToolRegistry toolRegistry,
@@ -52,7 +58,8 @@ public final class ToolExecutor {
                 argumentResolver,
                 policyEngine,
                 objectMapper,
-                ToolOutcomeRecorder.NOOP
+                ToolOutcomeRecorder.NOOP,
+                ToolExecutionSchedulers.shared()
         );
     }
 
@@ -63,6 +70,24 @@ public final class ToolExecutor {
             ObjectMapper objectMapper,
             ToolOutcomeRecorder outcomeRecorder
     ) {
+        this(
+                toolRegistry,
+                argumentResolver,
+                policyEngine,
+                objectMapper,
+                outcomeRecorder,
+                ToolExecutionSchedulers.shared()
+        );
+    }
+
+    public ToolExecutor(
+            ToolRegistry toolRegistry,
+            ToolArgumentResolver argumentResolver,
+            ToolPolicyEngine policyEngine,
+            ObjectMapper objectMapper,
+            ToolOutcomeRecorder outcomeRecorder,
+            ExecutorService executionScheduler
+    ) {
         this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry must not be null");
         this.argumentResolver = Objects.requireNonNull(argumentResolver, "argumentResolver must not be null");
         this.policyEngine = Objects.requireNonNull(policyEngine, "policyEngine must not be null");
@@ -70,6 +95,10 @@ public final class ToolExecutor {
         this.outcomeRecorder = Objects.requireNonNull(
                 outcomeRecorder,
                 "outcomeRecorder must not be null"
+        );
+        this.executionScheduler = Objects.requireNonNull(
+                executionScheduler,
+                "executionScheduler must not be null"
         );
     }
 
@@ -268,7 +297,7 @@ public final class ToolExecutor {
                         eventEmitter,
                         iteration,
                         budgetSession,
-                        runtimeContext.runId()
+                        runtimeContext
                 )
         );
     }
@@ -281,7 +310,7 @@ public final class ToolExecutor {
             AgentEventEmitter eventEmitter,
             int iteration,
             BudgetSession budgetSession,
-            String runId
+            AgentRuntimeContext runtimeContext
     ) {
         Optional<BudgetBlock> budgetBlock = budgetSession.admitToolCall();
         if (budgetBlock.isPresent()) {
@@ -302,14 +331,59 @@ public final class ToolExecutor {
                         toolCall.name()
                 )
         );
-        O output = tool.execute(input);
+        Future<O> execution = executionScheduler.submit(() -> invokeTool(
+                tool,
+                input,
+                new ToolExecutionContext(
+                        runtimeContext.runId(),
+                        toolCall.id(),
+                        runtimeContext.sessionId(),
+                        Optional.ofNullable(runtimeContext.userId()),
+                        Optional.ofNullable(runtimeContext.runtimeConfigSnapshotId())
+                )
+        ));
+        O output;
+        try {
+            output = execution.get(
+                    tool.descriptor().executionTimeout().toNanos(),
+                    TimeUnit.NANOSECONDS
+            );
+        } catch (TimeoutException exception) {
+            execution.cancel(true);
+            emitToolFailed(eventEmitter, iteration, toolCall, ToolErrorCode.TIMEOUT);
+            return ToolResult.failure(
+                    ToolErrorCode.TIMEOUT,
+                    "Tool execution timed out: " + tool.name()
+            );
+        } catch (InterruptedException exception) {
+            execution.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new ExecutionCancelledException();
+        } catch (ExecutionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("Tool execution failed", cause);
+        }
         String serializedOutput = serialize(output);
+        String modelVisibleOutput = tool instanceof UntrustedEvidenceTool untrusted
+                ? UntrustedEvidenceEnvelope.wrap(
+                        objectMapper,
+                        untrusted,
+                        toolCall.name(),
+                        serializedOutput
+                )
+                : serializedOutput;
         try {
             outcomeRecorder.recordSuccess(
-                    runId,
+                    runtimeContext.runId(),
                     toolCall.id(),
                     toolCall.name(),
-                    serializedOutput
+                    modelVisibleOutput
             );
         } catch (RuntimeException exception) {
             throw new ToolOutcomeRecordingException(
@@ -325,7 +399,19 @@ public final class ToolExecutor {
                         toolCall.name()
                 )
         );
-        return ToolResult.success(serializedOutput, decision);
+        return ToolResult.success(modelVisibleOutput, decision);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <I, O> O invokeTool(
+            AgentTool<I, O> tool,
+            I input,
+            ToolExecutionContext context
+    ) {
+        if (tool instanceof ContextAwareAgentTool<?, ?> contextual) {
+            return ((ContextAwareAgentTool<I, O>) contextual).execute(input, context);
+        }
+        return tool.execute(input);
     }
 
     private void emitToolFailed(

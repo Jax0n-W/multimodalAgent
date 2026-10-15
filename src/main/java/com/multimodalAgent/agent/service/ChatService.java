@@ -53,15 +53,24 @@ public class ChatService {
     private final UserAccountRepository userAccountRepository;
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
+
+
     private final multimodalAgentProperties properties;
+
+
     private final IntentClassifier intentClassifier;
     private final PsychologicalAssessmentService assessmentService;
+
     private final KnowledgeService knowledgeService;
+
     private final AgenticRagService agenticRagService;
     private final ToolOrchestrationService toolOrchestrationService;
+
     private final PrivacySanitizer privacySanitizer;
+
     private final ShortTermMemoryService shortTermMemoryService;
     private final AiClient aiClient;
+
     private final ChatRuntimeSessionRegistry runtimeSessions;
     private final ObjectProvider<ChatMigrationFacade> migrationFacade;
 

@@ -165,7 +165,6 @@ public final class DecisionTraceBuilder {
                         failed.toolName(),
                         failed.errorCode().name()
                 ));
-                childRequiresRunTerminal = true;
             } else if (event instanceof ToolPolicyEvaluatedEvent evaluated) {
                 MutableToolDecision tool = requireTool(
                         tools,
@@ -214,7 +213,8 @@ public final class DecisionTraceBuilder {
                 );
                 if (failed.errorCode() == ToolErrorCode.TOOL_NOT_FOUND) {
                     tool.transition(ToolTraceState.REQUESTED, ToolTraceState.FAILED, event.type());
-                } else if (failed.errorCode() == ToolErrorCode.EXECUTION_FAILED) {
+                } else if (failed.errorCode() == ToolErrorCode.EXECUTION_FAILED
+                        || failed.errorCode() == ToolErrorCode.TIMEOUT) {
                     tool.transition(ToolTraceState.STARTED, ToolTraceState.FAILED, event.type());
                 } else {
                     throw new IllegalArgumentException(
@@ -231,7 +231,6 @@ public final class DecisionTraceBuilder {
                         failed.toolName(),
                         failed.errorCode().name()
                 ));
-                childRequiresRunTerminal = true;
             } else if (event instanceof BudgetBlockedEvent blocked) {
                 if (blocked.toolCorrelated()) {
                     MutableToolDecision tool = requireTool(
@@ -287,9 +286,8 @@ public final class DecisionTraceBuilder {
         validateDeclaredToolCallCounts(snapshot, modelCompletions, requestedToolCounts);
         validateMultiToolOrdering(snapshot);
         validateTerminalCause(snapshot);
-        boolean runCompleted = lastEvent.type() == AgentEventType.RUN_COMPLETED;
         AgentStopReason terminalReason = stopReason;
-        tools.values().forEach(tool -> tool.requireTerminallyConsistent(runCompleted, terminalReason));
+        tools.values().forEach(tool -> tool.requireTerminallyConsistent(terminalReason));
 
         List<ToolDecisionTrace> toolDecisions = tools.values().stream()
                 .map(MutableToolDecision::toTrace)
@@ -395,7 +393,11 @@ public final class DecisionTraceBuilder {
             boolean modelMiddlewarePostFailure = nextIndex < events.size()
                     && events.get(nextIndex) instanceof RunStoppedEvent stopped
                     && stopped.stopReason() == AgentStopReason.INTERNAL_ERROR;
-            if (!modelMiddlewarePostFailure) {
+            boolean forcedFinalTurnRejectedToolCalls = nextIndex < events.size()
+                    && events.get(nextIndex) instanceof RunStoppedEvent stopped
+                    && stopped.stopReason() == AgentStopReason.MAX_ITERATIONS
+                    && stopped.iteration() == completed.iteration();
+            if (!modelMiddlewarePostFailure && !forcedFinalTurnRejectedToolCalls) {
                 throw new IllegalArgumentException(
                         "TOOL_REQUESTED count does not match the model-declared toolCallCount"
                 );
@@ -474,8 +476,10 @@ public final class DecisionTraceBuilder {
                 requireSameIteration(terminal, cause);
             }
             case MAX_ITERATIONS -> {
-                requireCause(cause instanceof ToolSucceededEvent,
-                        "MAX_ITERATIONS requires completion of the final iteration tool work");
+                requireCause(cause instanceof ToolSucceededEvent
+                                || cause instanceof ModelCompletedEvent completed
+                                && completed.finishReason() == ModelFinishReason.TOOL_CALLS,
+                        "MAX_ITERATIONS requires final tool work or a rejected final-turn tool call");
                 requireSameIteration(terminal, cause);
             }
             case INTERNAL_ERROR -> {
@@ -567,10 +571,7 @@ public final class DecisionTraceBuilder {
             state = nextState;
         }
 
-        private void requireTerminallyConsistent(
-                boolean runCompleted,
-                AgentStopReason terminalReason
-        ) {
+        private void requireTerminallyConsistent(AgentStopReason terminalReason) {
             if (state == ToolTraceState.VALIDATED
                     || state == ToolTraceState.STARTED) {
                 throw new IllegalArgumentException(
@@ -581,11 +582,6 @@ public final class DecisionTraceBuilder {
                     && terminalReason != AgentStopReason.INTERNAL_ERROR) {
                 throw new IllegalArgumentException(
                         "Tool lifecycle is incomplete for " + toolCallId + ": " + state
-                );
-            }
-            if (runCompleted && state != ToolTraceState.SUCCEEDED) {
-                throw new IllegalArgumentException(
-                        "RUN_COMPLETED requires every requested tool to succeed: " + toolCallId
                 );
             }
         }

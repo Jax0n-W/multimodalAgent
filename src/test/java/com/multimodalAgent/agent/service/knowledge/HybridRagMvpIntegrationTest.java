@@ -3,7 +3,9 @@ package com.multimodalAgent.agent.service.knowledge;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.config.multimodalAgentProperties;
 import com.multimodalAgent.agent.repository.KnowledgeChunkRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.io.InputStream;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest(properties = {
@@ -51,6 +54,7 @@ class HybridRagMvpIntegrationTest {
     @Autowired private KnowledgeChunkRepository chunks;
     @Autowired private ObjectMapper objectMapper;
     @Autowired private multimodalAgentProperties properties;
+    @Autowired private MeterRegistry meterRegistry;
 
     @MockBean private EmbeddingClient embeddingClient;
     @MockBean private ChromaGateway chromaGateway;
@@ -64,10 +68,10 @@ class HybridRagMvpIntegrationTest {
         properties.getKnowledge().setHybridMvpEnabled(true);
         properties.getKnowledge().setRetrievalMode(KnowledgeRetrievalMode.HYBRID_RRF);
         properties.getKnowledge().setMaxIndexChunks(100);
+        properties.getEmbedding().setFailureCooldown(Duration.ZERO);
         when(embeddingClient.modelName()).thenReturn("deterministic-campus-v1");
-        when(embeddingClient.embed(anyString())).thenAnswer(invocation ->
-                deterministicEmbedding(invocation.getArgument(0))
-        );
+        doAnswer(invocation -> deterministicEmbedding(invocation.getArgument(0)))
+                .when(embeddingClient).embed(anyString());
         try (InputStream stream = getClass().getResourceAsStream(
                 "/eval/p12-hybrid-rag-mvp-suite.json"
         )) {
@@ -107,7 +111,9 @@ class HybridRagMvpIntegrationTest {
 
     @Test
     void embeddingUnavailabilityAndModelMismatchAreTruthfullyDegraded() {
-        when(embeddingClient.embed(anyString())).thenReturn(List.of());
+        double degradedBefore = degradedCount();
+        when(embeddingClient.embed(anyString()))
+                .thenThrow(new IllegalStateException("connection refused"));
 
         KnowledgeRetrievalResult unavailable = knowledgeService.retrieve(
                 "失眠如何调整作息", 5, KnowledgeRetrievalMode.HYBRID_RRF
@@ -115,10 +121,10 @@ class HybridRagMvpIntegrationTest {
 
         assertEquals(KnowledgeRetrievalStatus.LEXICAL_ONLY_DEGRADED, unavailable.status());
         assertEquals("sleep.md", unavailable.results().get(0).source());
+        assertEquals(degradedBefore + 1.0, degradedCount(), 0.0);
 
-        when(embeddingClient.embed(anyString())).thenAnswer(invocation ->
-                deterministicEmbedding(invocation.getArgument(0))
-        );
+        doAnswer(invocation -> deterministicEmbedding(invocation.getArgument(0)))
+                .when(embeddingClient).embed(anyString());
         when(embeddingClient.modelName()).thenReturn("different-model-v2");
 
         KnowledgeRetrievalResult mismatch = knowledgeService.retrieve(
@@ -241,6 +247,14 @@ class HybridRagMvpIntegrationTest {
             vector.add(matched);
         }
         return List.copyOf(vector);
+    }
+
+    private double degradedCount() {
+        var counter = meterRegistry.find("knowledge.retrieval.degraded")
+                .tag("marker", KnowledgeRetrievalTelemetry.LEXICAL_ONLY_DEGRADED)
+                .tag("mode", KnowledgeRetrievalMode.HYBRID_RRF.name())
+                .counter();
+        return counter == null ? 0.0 : counter.count();
     }
 
     private KnowledgeRetrievalStatus expectedStatus(KnowledgeRetrievalMode mode) {

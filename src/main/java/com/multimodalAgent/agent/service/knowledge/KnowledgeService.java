@@ -8,7 +8,6 @@ import com.multimodalAgent.agent.domain.KnowledgeChunk;
 import com.multimodalAgent.agent.repository.KnowledgeChunkRepository;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -19,6 +18,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,21 +41,35 @@ public class KnowledgeService {
     private final ChromaGateway chromaGateway;
     private final EmbeddingClient embeddingClient;
     private final ObjectMapper objectMapper;
+    private final TextTokenizer tokenizer;
+    private final Reranker reranker;
+    private final KnowledgeRetrievalTelemetry telemetry;
+    private final Executor retrievalExecutor;
     private final KnowledgeChunker chunker = new KnowledgeChunker();
     private final TokenVectorizer legacyVectorizer = new TokenVectorizer();
+    private final AtomicLong embeddingCircuitOpenUntilNanos = new AtomicLong();
+    private final AtomicReference<String> embeddingCircuitReason = new AtomicReference<>("");
 
     public KnowledgeService(
             KnowledgeChunkRepository knowledgeChunkRepository,
             multimodalAgentProperties properties,
             ChromaGateway chromaGateway,
             EmbeddingClient embeddingClient,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            TextTokenizer tokenizer,
+            Reranker reranker,
+            KnowledgeRetrievalTelemetry telemetry,
+            @Qualifier("hybridRetrievalExecutor") Executor retrievalExecutor
     ) {
         this.knowledgeChunkRepository = knowledgeChunkRepository;
         this.properties = properties;
         this.chromaGateway = chromaGateway;
         this.embeddingClient = embeddingClient;
         this.objectMapper = objectMapper;
+        this.tokenizer = tokenizer;
+        this.reranker = reranker;
+        this.telemetry = telemetry;
+        this.retrievalExecutor = retrievalExecutor;
     }
 
     /**
@@ -79,12 +98,42 @@ public class KnowledgeService {
             chunk.setSource(source);
             chunk.setSourceIndex(index);
             chunk.setContent(chunks.get(index));
-            List<Double> embedding = safeEmbedding(chunks.get(index));
+            List<Double> embedding = embeddingAttempt(chunks.get(index)).vector();
+            if (!embedding.isEmpty()) {
+                validateEmbedding(embedding);
+            }
             chunk.setEmbeddingJson(embedding.isEmpty() ? null : serializeEmbedding(embedding));
             KnowledgeChunk saved = knowledgeChunkRepository.save(chunk);
             chromaGateway.mirror(saved);
         }
         return chunks.size();
+    }
+
+    /**
+     * Re-embeds legacy, missing, or model-incompatible rows without fabricating vectors.
+     * A backend outage stops the pass after the first failed call and leaves rows lexical-only.
+     */
+    @Transactional
+    public int backfillEmbeddings() {
+        int updated = 0;
+        for (KnowledgeChunk chunk : boundedChunks()) {
+            if (!parseCompatibleEmbedding(chunk.getEmbeddingJson()).isEmpty()) {
+                continue;
+            }
+            EmbeddingAttempt attempt = embeddingAttempt(chunk.getContent());
+            if (!attempt.available()) {
+                return updated;
+            }
+            try {
+                validateEmbedding(attempt.vector());
+            } catch (RuntimeException incompatible) {
+                return updated;
+            }
+            chunk.setEmbeddingJson(serializeEmbedding(attempt.vector()));
+            knowledgeChunkRepository.save(chunk);
+            updated++;
+        }
+        return updated;
     }
 
     /** Uses the configured MVP mode, or the pre-P12 retriever when the feature flag is disabled. */
@@ -131,17 +180,14 @@ public class KnowledgeService {
                     "shared public knowledge index is empty");
         }
 
-        List<SearchResult> lexical = mode == KnowledgeRetrievalMode.DENSE_ONLY
-                ? List.of()
-                : bm25(query, chunks);
-        DenseBranch dense = mode == KnowledgeRetrievalMode.BM25_ONLY
-                ? DenseBranch.notRequested()
-                : dense(query, chunks);
+        RecallBranches branches = recall(query, chunks, mode);
+        List<SearchResult> lexical = branches.lexical();
+        DenseBranch dense = branches.dense();
 
         return switch (mode) {
             case BM25_ONLY -> finishSingle(
                     mode, KnowledgeRetrievalStatus.BM25_ONLY, lexical, topK, started,
-                    "BM25(k1=1.2,b=0.75); Chinese unigrams+bigrams and normalized ASCII terms"
+                    "BM25(k1=1.2,b=0.75); " + tokenizer.description()
             );
             case DENSE_ONLY -> dense.available()
                     ? finishSingle(
@@ -160,18 +206,66 @@ public class KnowledgeService {
                             : KnowledgeRetrievalStatus.LEXICAL_ONLY_DEGRADED;
                     yield result(mode, status, degraded, started, dense.detail());
                 }
-                List<SearchResult> fused = reciprocalRankFusion(lexical, dense.results(), topK);
+                int candidateLimit = Math.max(
+                        topK, properties.getKnowledge().getRerank().getCandidateLimit()
+                );
+                List<SearchResult> fused = reciprocalRankFusion(
+                        lexical, dense.results(), candidateLimit
+                );
+                RerankOutcome reranked = rerank(query, fused, topK);
                 yield result(
                         mode,
-                        fused.isEmpty()
+                        reranked.results().isEmpty()
                                 ? KnowledgeRetrievalStatus.NO_EVIDENCE
                                 : KnowledgeRetrievalStatus.HYBRID,
-                        limitAndExpand(fused, topK),
+                        limitAndExpand(reranked.results(), topK),
                         started,
-                        "RRF(k=60) over BM25 and compatible persisted dense embeddings"
+                        "parallel BM25+dense; RRF(k=60); " + reranked.detail()
                 );
             }
         };
+    }
+
+    private RecallBranches recall(
+            String query,
+            List<KnowledgeChunk> chunks,
+            KnowledgeRetrievalMode mode
+    ) {
+        if (mode == KnowledgeRetrievalMode.BM25_ONLY) {
+            return new RecallBranches(bm25(query, chunks), DenseBranch.notRequested());
+        }
+        if (mode == KnowledgeRetrievalMode.DENSE_ONLY) {
+            return new RecallBranches(List.of(), dense(query, chunks));
+        }
+        CompletableFuture<List<SearchResult>> lexical = CompletableFuture.supplyAsync(
+                () -> bm25(query, chunks), retrievalExecutor
+        );
+        CompletableFuture<DenseBranch> dense = CompletableFuture.supplyAsync(
+                () -> dense(query, chunks), retrievalExecutor
+        );
+        try {
+            return new RecallBranches(lexical.join(), dense.join());
+        } catch (CompletionException exception) {
+            Throwable cause = exception.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw exception;
+        }
+    }
+
+    private RerankOutcome rerank(String query, List<SearchResult> fused, int topK) {
+        try {
+            return reranker.rerank(query, fused, topK);
+        } catch (RuntimeException exception) {
+            String reason = exception.getClass().getSimpleName();
+            telemetry.recordRerankFallback(reason);
+            return new RerankOutcome(
+                    fused.stream().limit(topK).toList(),
+                    false,
+                    "reranker unavailable (" + reason + "); preserved RRF order"
+            );
+        }
     }
 
     private KnowledgeRetrievalResult finishSingle(
@@ -199,9 +293,11 @@ public class KnowledgeService {
             long started,
             String detail
     ) {
-        return new KnowledgeRetrievalResult(
+        KnowledgeRetrievalResult result = new KnowledgeRetrievalResult(
                 mode, status, results, Math.max(0, System.nanoTime() - started), detail
         );
+        telemetry.record(result);
+        return result;
     }
 
     private List<KnowledgeChunk> boundedChunks() {
@@ -215,12 +311,12 @@ public class KnowledgeService {
     }
 
     private List<SearchResult> bm25(String query, List<KnowledgeChunk> chunks) {
-        List<String> queryTerms = tokenize(query);
+        List<String> queryTerms = tokenizer.tokenize(query);
         if (queryTerms.isEmpty()) {
             return List.of();
         }
         List<DocumentTerms> documents = chunks.stream()
-                .map(chunk -> new DocumentTerms(chunk, tokenize(chunk.getContent())))
+                .map(chunk -> new DocumentTerms(chunk, tokenizer.tokenize(chunk.getContent())))
                 .toList();
         double averageLength = documents.stream()
                 .mapToInt(document -> document.terms().size())
@@ -266,11 +362,18 @@ public class KnowledgeService {
     }
 
     private DenseBranch dense(String query, List<KnowledgeChunk> chunks) {
-        List<Double> queryEmbedding = safeEmbedding(query);
-        if (queryEmbedding.isEmpty()) {
-            return DenseBranch.unavailable("embedding backend unavailable; lexical-only degradation");
+        EmbeddingAttempt attempt = embeddingAttempt(query);
+        if (!attempt.available()) {
+            return DenseBranch.unavailable(attempt.detail());
         }
-        validateEmbedding(queryEmbedding);
+        List<Double> queryEmbedding = attempt.vector();
+        try {
+            validateEmbedding(queryEmbedding);
+        } catch (RuntimeException incompatible) {
+            return DenseBranch.unavailable(
+                    "embedding response has incompatible model dimension; lexical-only degradation"
+            );
+        }
         List<SearchResult> ranked = new ArrayList<>();
         int compatible = 0;
         for (KnowledgeChunk chunk : chunks) {
@@ -349,7 +452,7 @@ public class KnowledgeService {
         if (!chromaResults.isEmpty()) {
             return expandBestContext(chromaResults, topK);
         }
-        List<Double> queryEmbedding = safeEmbedding(query);
+        List<Double> queryEmbedding = embeddingAttempt(query).vector();
         if (!queryEmbedding.isEmpty()) {
             List<SearchResult> dense = knowledgeChunkRepository.findAll().stream()
                     .map(chunk -> new SearchResult(
@@ -491,12 +594,35 @@ public class KnowledgeService {
                 && (configured == 0 || configured == dimension);
     }
 
-    private List<Double> safeEmbedding(String text) {
+    private EmbeddingAttempt embeddingAttempt(String text) {
+        long now = System.nanoTime();
+        long openUntil = embeddingCircuitOpenUntilNanos.get();
+        if (openUntil > now) {
+            return EmbeddingAttempt.unavailable(
+                    "embedding circuit open after " + embeddingCircuitReason.get()
+                            + "; lexical-only degradation"
+            );
+        }
         try {
             List<Double> embedding = embeddingClient.embed(text);
-            return embedding == null ? List.of() : List.copyOf(embedding);
-        } catch (RuntimeException ignored) {
-            return List.of();
+            List<Double> vector = embedding == null ? List.of() : List.copyOf(embedding);
+            if (vector.isEmpty()) {
+                return EmbeddingAttempt.unavailable(
+                        "embedding backend returned no vector; lexical-only degradation"
+                );
+            }
+            embeddingCircuitOpenUntilNanos.set(0);
+            embeddingCircuitReason.set("");
+            return EmbeddingAttempt.available(vector);
+        } catch (RuntimeException exception) {
+            String reason = exception.getClass().getSimpleName();
+            long cooldown = properties.getEmbedding().getFailureCooldown().toNanos();
+            embeddingCircuitReason.set(reason);
+            embeddingCircuitOpenUntilNanos.set(saturatingAdd(System.nanoTime(), cooldown));
+            return EmbeddingAttempt.unavailable(
+                    "embedding backend unavailable (" + reason
+                            + "); lexical-only degradation"
+            );
         }
     }
 
@@ -517,55 +643,6 @@ public class KnowledgeService {
         return leftNorm == 0.0 || rightNorm == 0.0
                 ? 0.0
                 : dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
-    }
-
-    private List<String> tokenize(String text) {
-        String normalized = Normalizer.normalize(text, Normalizer.Form.NFKC)
-                .toLowerCase(Locale.ROOT);
-        List<String> terms = new ArrayList<>();
-        StringBuilder ascii = new StringBuilder();
-        StringBuilder cjk = new StringBuilder();
-        normalized.codePoints().forEach(codePoint -> {
-            if (isCjk(codePoint)) {
-                flushAscii(ascii, terms);
-                cjk.appendCodePoint(codePoint);
-                return;
-            }
-            flushCjk(cjk, terms);
-            if (Character.isLetterOrDigit(codePoint)) {
-                ascii.appendCodePoint(codePoint);
-            } else {
-                flushAscii(ascii, terms);
-            }
-        });
-        flushAscii(ascii, terms);
-        flushCjk(cjk, terms);
-        return List.copyOf(terms);
-    }
-
-    private boolean isCjk(int codePoint) {
-        return Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN;
-    }
-
-    private void flushAscii(StringBuilder token, List<String> terms) {
-        if (!token.isEmpty()) {
-            terms.add(token.toString());
-            token.setLength(0);
-        }
-    }
-
-    private void flushCjk(StringBuilder sequence, List<String> terms) {
-        if (sequence.isEmpty()) {
-            return;
-        }
-        int[] points = sequence.codePoints().toArray();
-        for (int point : points) {
-            terms.add(new String(Character.toChars(point)));
-        }
-        for (int index = 0; index + 1 < points.length; index++) {
-            terms.add(new String(points, index, 2));
-        }
-        sequence.setLength(0);
     }
 
     private Map<String, Integer> frequencies(List<String> terms) {
@@ -630,7 +707,36 @@ public class KnowledgeService {
         }
     }
 
+    private static long saturatingAdd(long left, long right) {
+        try {
+            return Math.addExact(left, right);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
     private record DocumentTerms(KnowledgeChunk chunk, List<String> terms) {
+    }
+
+    private record RecallBranches(List<SearchResult> lexical, DenseBranch dense) {
+        private RecallBranches {
+            lexical = List.copyOf(lexical);
+        }
+    }
+
+    private record EmbeddingAttempt(boolean available, List<Double> vector, String detail) {
+        private EmbeddingAttempt {
+            vector = List.copyOf(vector);
+            detail = detail == null ? "" : detail;
+        }
+
+        private static EmbeddingAttempt available(List<Double> vector) {
+            return new EmbeddingAttempt(true, vector, "embedding backend available");
+        }
+
+        private static EmbeddingAttempt unavailable(String detail) {
+            return new EmbeddingAttempt(false, List.of(), detail);
+        }
     }
 
     private record DenseBranch(boolean available, List<SearchResult> results, String detail) {

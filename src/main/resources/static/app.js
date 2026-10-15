@@ -3,7 +3,7 @@ const state = {
   sessionId: null,
   sending: false,
   isAdmin: false,
-  modelName: "multimodalAgent-qwen2.5-7b-ft:latest",
+  modelName: "mindbridge-qwen2.5-7b",
   latestReports: []
 };
 

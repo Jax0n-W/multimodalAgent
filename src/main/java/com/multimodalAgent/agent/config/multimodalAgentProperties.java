@@ -48,7 +48,7 @@ public class multimodalAgentProperties {
         return mcp;
     }
 
-    public AgentRuntime getRuntime() {
+    public AgentRuntime getRuntime() { // 获取运行时配置
         return runtime;
     }
 
@@ -57,6 +57,7 @@ public class multimodalAgentProperties {
         private final Budget budget = new Budget();
         private final Memory memory = new Memory();
         private final Skills skills = new Skills();
+        private final Tooling tools = new Tooling();
         private final ChatMigration chatMigration = new ChatMigration();
 
         public boolean isEnabled() {
@@ -79,8 +80,43 @@ public class multimodalAgentProperties {
             return skills;
         }
 
+        public Tooling getTools() {
+            return tools;
+        }
+
         public ChatMigration getChatMigration() {
             return chatMigration;
+        }
+    }
+
+    public static class Tooling {
+        private Duration readTimeout = Duration.ofSeconds(5);
+        private Duration mutationTimeout = Duration.ofSeconds(10);
+
+        public Duration getReadTimeout() {
+            return readTimeout;
+        }
+
+        public void setReadTimeout(Duration readTimeout) {
+            this.readTimeout = requirePositive(readTimeout, "runtime.tools.read-timeout");
+        }
+
+        public Duration getMutationTimeout() {
+            return mutationTimeout;
+        }
+
+        public void setMutationTimeout(Duration mutationTimeout) {
+            this.mutationTimeout = requirePositive(
+                    mutationTimeout,
+                    "runtime.tools.mutation-timeout"
+            );
+        }
+
+        private static Duration requirePositive(Duration value, String name) {
+            if (value == null || value.isZero() || value.isNegative()) {
+                throw new IllegalArgumentException(name + " must be positive");
+            }
+            return value;
         }
     }
 
@@ -294,7 +330,7 @@ public class multimodalAgentProperties {
         /** 本地模型服务地址。 */
         private String baseUrl = "http://localhost:11434";
         /** multimodalAgent 项目模型名称。 */
-        private String model = "multimodalAgent-qwen2.5-7b-ft:latest";
+        private String model = "mindbridge-qwen2.5-7b";
 
         public String getBaseUrl() {
             return baseUrl;
@@ -370,12 +406,16 @@ public class multimodalAgentProperties {
     }
 
     public static class Embedding {
-        /** Embedding 服务地址。 */
-        private String baseUrl = "https://api.openai.com";
-        /** Embedding API Key，留空时自动走本地检索兜底。 */
+        /** 本地 Ollama Embedding 服务地址。 */
+        private String baseUrl = "http://localhost:11434";
+        /** 保留用于旧配置兼容；本地 Ollama 不需要 API Key。 */
         private String apiKey = "";
-        /** 文档要求的默认 embedding 模型。 */
-        private String model = "text-embedding-3-small";
+        /** 本地轻量级多语言 embedding 模型。 */
+        private String model = "bge-m3";
+        /** Ollama 连接与响应超时；超时会触发词法检索降级。 */
+        private Duration timeout = Duration.ofSeconds(5);
+        /** 后端连接失败后短暂熔断，避免一次摄取重复等待。 */
+        private Duration failureCooldown = Duration.ofSeconds(10);
 
         public String getBaseUrl() {
             return baseUrl;
@@ -400,9 +440,34 @@ public class multimodalAgentProperties {
         public void setModel(String model) {
             this.model = model;
         }
+
+        public Duration getTimeout() {
+            return timeout;
+        }
+
+        public void setTimeout(Duration timeout) {
+            if (timeout == null || timeout.isNegative() || timeout.isZero()) {
+                throw new IllegalArgumentException("embedding.timeout must be positive");
+            }
+            this.timeout = timeout;
+        }
+
+        public Duration getFailureCooldown() {
+            return failureCooldown;
+        }
+
+        public void setFailureCooldown(Duration failureCooldown) {
+            if (failureCooldown == null || failureCooldown.isNegative()) {
+                throw new IllegalArgumentException(
+                        "embedding.failure-cooldown must not be negative"
+                );
+            }
+            this.failureCooldown = failureCooldown;
+        }
     }
 
     public static class Knowledge {
+        private final Rerank rerank = new Rerank();
         /** 每次 RAG 检索返回的候选片段数量。 */
         private int topK = 4;
         /** 是否启用外部 Chroma 向量库。 */
@@ -420,6 +485,10 @@ public class multimodalAgentProperties {
         private int maxEmbeddingDimensions = 3072;
         /** Zero means infer the dimension from the configured model response. */
         private int embeddingDimensions;
+
+        public Rerank getRerank() {
+            return rerank;
+        }
 
         public int getTopK() {
             return topK;
@@ -520,6 +589,72 @@ public class multimodalAgentProperties {
                 );
             }
             this.embeddingDimensions = embeddingDimensions;
+        }
+    }
+
+    public static class Rerank {
+        /** Disabled by default so a missing optional model never blocks hybrid retrieval. */
+        private boolean enabled;
+        /** Ollama model capable of producing query-document relevance scores. */
+        private String model = "";
+        /** Number of RRF candidates passed to the reranking stage. */
+        private int candidateLimit = 20;
+        /** Per-document prompt bound for local model reranking. */
+        private int maxDocumentChars = 2000;
+        /** Local reranker request timeout. */
+        private Duration timeout = Duration.ofSeconds(15);
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getModel() {
+            return model;
+        }
+
+        public void setModel(String model) {
+            this.model = model == null ? "" : model;
+        }
+
+        public int getCandidateLimit() {
+            return candidateLimit;
+        }
+
+        public void setCandidateLimit(int candidateLimit) {
+            if (candidateLimit <= 0) {
+                throw new IllegalArgumentException(
+                        "knowledge.rerank.candidate-limit must be positive"
+                );
+            }
+            this.candidateLimit = candidateLimit;
+        }
+
+        public int getMaxDocumentChars() {
+            return maxDocumentChars;
+        }
+
+        public void setMaxDocumentChars(int maxDocumentChars) {
+            if (maxDocumentChars <= 0) {
+                throw new IllegalArgumentException(
+                        "knowledge.rerank.max-document-chars must be positive"
+                );
+            }
+            this.maxDocumentChars = maxDocumentChars;
+        }
+
+        public Duration getTimeout() {
+            return timeout;
+        }
+
+        public void setTimeout(Duration timeout) {
+            if (timeout == null || timeout.isNegative() || timeout.isZero()) {
+                throw new IllegalArgumentException("knowledge.rerank.timeout must be positive");
+            }
+            this.timeout = timeout;
         }
     }
 

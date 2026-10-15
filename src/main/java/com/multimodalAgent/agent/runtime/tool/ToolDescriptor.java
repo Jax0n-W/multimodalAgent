@@ -3,6 +3,7 @@ package com.multimodalAgent.agent.runtime.tool;
 import com.multimodalAgent.agent.recovery.ToolRecoveryContract;
 import com.multimodalAgent.agent.recovery.ToolReplaySemantics;
 
+import java.time.Duration;
 import java.util.Objects;
 
 public record ToolDescriptor<I>(
@@ -13,8 +14,11 @@ public record ToolDescriptor<I>(
         boolean readOnly,
         boolean idempotent,
         boolean requiresApproval,
-        ToolRecoveryContract recoveryContract
+        ToolRecoveryContract recoveryContract,
+        Duration executionTimeout
 ) {
+
+    public static final Duration DEFAULT_EXECUTION_TIMEOUT = Duration.ofSeconds(10);
 
     public ToolDescriptor(
             String name,
@@ -33,7 +37,54 @@ public record ToolDescriptor<I>(
                 readOnly,
                 idempotent,
                 requiresApproval,
-                ToolRecoveryContract.defaults(readOnly, idempotent)
+                ToolRecoveryContract.defaults(readOnly, idempotent),
+                DEFAULT_EXECUTION_TIMEOUT
+        );
+    }
+
+    public ToolDescriptor(
+            String name,
+            String description,
+            Class<I> inputType,
+            ToolRisk risk,
+            boolean readOnly,
+            boolean idempotent,
+            boolean requiresApproval,
+            Duration executionTimeout
+    ) {
+        this(
+                name,
+                description,
+                inputType,
+                risk,
+                readOnly,
+                idempotent,
+                requiresApproval,
+                ToolRecoveryContract.defaults(readOnly, idempotent),
+                executionTimeout
+        );
+    }
+
+    public ToolDescriptor(
+            String name,
+            String description,
+            Class<I> inputType,
+            ToolRisk risk,
+            boolean readOnly,
+            boolean idempotent,
+            boolean requiresApproval,
+            ToolRecoveryContract recoveryContract
+    ) {
+        this(
+                name,
+                description,
+                inputType,
+                risk,
+                readOnly,
+                idempotent,
+                requiresApproval,
+                recoveryContract,
+                DEFAULT_EXECUTION_TIMEOUT
         );
     }
 
@@ -47,6 +98,10 @@ public record ToolDescriptor<I>(
         Objects.requireNonNull(inputType, "inputType must not be null");
         Objects.requireNonNull(risk, "risk must not be null");
         Objects.requireNonNull(recoveryContract, "recoveryContract must not be null");
+        Objects.requireNonNull(executionTimeout, "executionTimeout must not be null");
+        if (executionTimeout.isZero() || executionTimeout.isNegative()) {
+            throw new IllegalArgumentException("executionTimeout must be positive");
+        }
         ToolReplaySemantics expected = readOnly
                 ? ToolReplaySemantics.REPLAY_SAFE
                 : idempotent

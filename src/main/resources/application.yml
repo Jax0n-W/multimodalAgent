@@ -62,7 +62,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics
 
 multimodal-agent:
   runtime:
@@ -73,6 +73,9 @@ multimodal-agent:
       max-total-chars: ${AGENT_MEMORY_MAX_TOTAL_CHARS:12000}
     skills:
       enabled: ${AGENT_SKILLS_ENABLED:false}
+    tools:
+      read-timeout: ${AGENT_TOOL_READ_TIMEOUT:5s}
+      mutation-timeout: ${AGENT_TOOL_MUTATION_TIMEOUT:10s}
     chat-migration:
       enabled: ${AGENT_CHAT_MIGRATION_ENABLED:false}
     budget:
@@ -106,7 +109,7 @@ multimodal-agent:
     idle-timeout: ${AI_IDLE_TIMEOUT:30s}
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
-      model: ${OLLAMA_MODEL:multimodalAgent-qwen2.5-7b-ft:latest}
+      model: ${OLLAMA_MODEL:mindbridge-qwen2.5-7b}
     openai:
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       api-key: ${OPENAI_API_KEY:}
@@ -115,9 +118,10 @@ multimodal-agent:
     history-limit: ${CHAT_HISTORY_LIMIT:10}
     short-memory-ttl-hours: ${CHAT_SHORT_MEMORY_TTL_HOURS:24}
   embedding:
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com}
-    api-key: ${OPENAI_API_KEY:}
-    model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    model: ${OLLAMA_EMBEDDING_MODEL:bge-m3}
+    timeout: ${OLLAMA_EMBEDDING_TIMEOUT:5s}
+    failure-cooldown: ${OLLAMA_EMBEDDING_FAILURE_COOLDOWN:10s}
   knowledge:
     top-k: ${RAG_TOP_K:4}
     hybrid-mvp-enabled: ${RAG_HYBRID_MVP_ENABLED:true}
@@ -125,7 +129,13 @@ multimodal-agent:
     max-index-chunks: ${RAG_MAX_INDEX_CHUNKS:2000}
     max-embedding-dimensions: ${RAG_MAX_EMBEDDING_DIMENSIONS:3072}
     embedding-dimensions: ${RAG_EMBEDDING_DIMENSIONS:0}
-    use-chroma: ${USE_CHROMA:true}
+    rerank:
+      enabled: ${RAG_RERANK_ENABLED:false}
+      model: ${OLLAMA_RERANK_MODEL:}
+      candidate-limit: ${RAG_RERANK_CANDIDATE_LIMIT:20}
+      max-document-chars: ${RAG_RERANK_MAX_DOCUMENT_CHARS:2000}
+      timeout: ${RAG_RERANK_TIMEOUT:15s}
+    use-chroma: ${USE_CHROMA:false}
     chroma-base-url: ${CHROMA_BASE_URL:http://localhost:8000}
     chroma-collection: ${CHROMA_COLLECTION:multimodalAgent_knowledge}
     chunk-size: ${KNOWLEDGE_CHUNK_SIZE:512}
