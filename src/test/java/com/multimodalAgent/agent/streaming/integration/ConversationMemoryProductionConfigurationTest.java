@@ -22,7 +22,7 @@ class ConversationMemoryProductionConfigurationTest {
             new StreamingAgentExecutionConfiguration();
 
     @Test
-    void disabledProductionMemoryKeepsRequestOnlyBehavior() {
+    void productionMemoryIsAlwaysPartOfContextAssembly() {
         AtomicInteger reads = new AtomicInteger();
         ConversationMemoryReader reader = query -> {
             reads.incrementAndGet();
@@ -32,8 +32,11 @@ class ConversationMemoryProductionConfigurationTest {
                 new multimodalAgentProperties(), new ObjectMapper(), reader
         ).assemble(input());
 
-        assertEquals(0, reads.get());
-        assertEquals(List.of("chat-business-context", "chat-untrusted-evidence", "request-messages"), snapshot.orderedContributions().stream()
+        assertEquals(1, reads.get());
+        assertEquals(List.of(
+                "chat-business-context", "chat-untrusted-evidence",
+                "conversation-memory", "request-messages"
+        ), snapshot.orderedContributions().stream()
                 .map(value -> value.sourceId()).toList());
         assertEquals(List.of(AgentMessage.user("current")), snapshot.messages());
     }
@@ -41,7 +44,6 @@ class ConversationMemoryProductionConfigurationTest {
     @Test
     void enabledProductionMemoryPrecedesRequestAndUsesConfiguredWindow() {
         multimodalAgentProperties properties = new multimodalAgentProperties();
-        properties.getRuntime().getMemory().setEnabled(true);
         properties.getRuntime().getMemory().setMaxTurns(1);
         properties.getRuntime().getMemory().setMaxTotalChars(100);
         ConversationMemoryReader reader = query -> List.of(new ConversationTurn(

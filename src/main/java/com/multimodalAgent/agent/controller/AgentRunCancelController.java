@@ -5,7 +5,6 @@ import com.multimodalAgent.agent.runtime.control.CancelRequestResult;
 import com.multimodalAgent.agent.security.CurrentUser;
 import com.multimodalAgent.agent.streaming.integration.LocalRunCancellationService;
 import com.multimodalAgent.agent.streaming.integration.DistributedCancellationUnavailableException;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,11 +18,6 @@ import reactor.core.scheduler.Schedulers;
 /** Explicit cancellation endpoint; SSE disconnect remains observation-only. */
 @RestController
 @RequestMapping("/api/agent/runs")
-@ConditionalOnProperty(
-        prefix = "multimodal-agent.runtime",
-        name = "enabled",
-        havingValue = "true"
-)
 public final class AgentRunCancelController {
 
     private final LocalRunCancellationService cancellation;

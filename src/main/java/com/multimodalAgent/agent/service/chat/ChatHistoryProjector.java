@@ -10,7 +10,6 @@ import com.multimodalAgent.agent.persistence.model.AgentRunStatus;
 import com.multimodalAgent.agent.persistence.model.ChatProjectionStatus;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
 import com.multimodalAgent.agent.persistence.repository.ChatHistoryProjectionRepository;
-import com.multimodalAgent.agent.persistence.repository.ChatRuntimeSessionRepository;
 import com.multimodalAgent.agent.repository.ChatMessageRepository;
 import com.multimodalAgent.agent.repository.ChatSessionRepository;
 import com.multimodalAgent.agent.repository.UserAccountRepository;
@@ -19,13 +18,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Idempotently projects a durable successful AgentRun into the legacy chat history view. */
+/** Idempotently projects a durable successful AgentRun into the existing chat history view. */
 @Service
 public class ChatHistoryProjector {
 
     private final AgentRunRepository runs;
     private final ChatHistoryProjectionRepository projections;
-    private final ChatRuntimeSessionRepository runtimeSessions;
     private final ChatSessionRepository sessions;
     private final ChatMessageRepository messages;
     private final UserAccountRepository users;
@@ -33,14 +31,12 @@ public class ChatHistoryProjector {
     public ChatHistoryProjector(
             AgentRunRepository runs,
             ChatHistoryProjectionRepository projections,
-            ChatRuntimeSessionRepository runtimeSessions,
             ChatSessionRepository sessions,
             ChatMessageRepository messages,
             UserAccountRepository users
     ) {
         this.runs = runs;
         this.projections = projections;
-        this.runtimeSessions = runtimeSessions;
         this.sessions = sessions;
         this.messages = messages;
         this.users = users;
@@ -62,9 +58,6 @@ public class ChatHistoryProjector {
                 || run.getFinalContent() == null
                 || !run.getFinalContent().equals(finalContent)) {
             throw new IllegalStateException("AgentRun is not durably projectable");
-        }
-        if (runtimeSessions.findBySessionIdAndUserId(sessionId, userId).isEmpty()) {
-            throw new IllegalStateException("Runtime session marker not found");
         }
         ChatSession session = sessions.findByPublicIdAndUser_Id(sessionId, userId)
                 .orElseThrow(() -> new IllegalStateException("Chat session not found"));

@@ -6,6 +6,13 @@ This document describes the proposed P12 target and the audited P12.1 baseline a
 `8df06ff7fc31485ad29ceb5c8f5ef40ffb3cd8e5`. It is architecture, not evidence that P12.2 or later
 has been implemented. ADR-027 is the normative decision record.
 
+Chat-routing update (2026-10-16): ADR-029 supersedes the rollout boundary described in this
+historical baseline. Both existing chat endpoints now follow one path:
+`ChatService -> UnifiedChatRuntimeService -> StreamingAgentExecutionService`. All sessions are
+Runtime-native conversations, and there is no migration-marker table or configuration
+switch back to a legacy final-answer engine. The remaining legacy references in this document
+describe retrieval migration history, not an active choice between two chat runtimes.
+
 ## Current inventory
 
 | Area | Current repository artifact | Assessment | P12 disposition |
@@ -19,7 +26,7 @@ has been implemented. ADR-027 is the normative decision record.
 | Result | `SearchResult` | Only numeric chunk ID, source, content, score. | Supersede with typed `RetrievalEvidence`; keep compatibility mapping temporarily. |
 | Legacy orchestration | `AgenticRagService`, `AgenticRagResult` | Up to two retrieve/review cycles; auxiliary `AiClient.complete` calls are outside Model Gateway and budget ownership. | Feature-flagged compatibility only, then retire after P12.6 gates. |
 | Runtime tool | `KnowledgeSearchTool`, `KnowledgeSearchInput` | Reuses Tool Registry/Policy Engine, but has no trusted retrieval principal/generation binding. | Keep public query/topK shape; add server-bound contextual adapter. |
-| Fresh chat | `ChatMigrationFacade` and `ChatService` | P12.1H now assesses and commits the existing report/outbox transaction before legacy RAG. Known operational retrieval failure degrades to empty evidence only for HIGH risk. | Preserve this ordering while replacing retrieval in P12.5. |
+| Fresh chat at the audited baseline | `ChatMigrationFacade` and `ChatService` | P12.1H assessed and committed the existing report/outbox transaction before legacy RAG. This routing design is superseded by ADR-029. | The current `UnifiedChatRuntimeService` preserves the ordering and sends every final answer through Runtime. |
 | Trust boundary | `UntrustedEvidenceContextSource`, `AgentContextAssembler` | Strong reusable P11.4 boundary: canonical non-SYSTEM evidence, deterministic ordering/provenance. | Reuse unchanged; encode typed P12 evidence as untrusted data. |
 | Snapshots/recovery | `AgentContextSnapshot`, `ContextAssemblingAgentExecutionCoordinator`, P10 recovery | Fresh context is content-addressed; Recovery resumes checkpoints and does not reassemble context. | Preserve. Never rerun historical retrieval to refresh evidence. |
 | Evaluation | P9 eval package, ADR-015, `docs/eval/README.md` | Good deterministic provenance/reporting, but `contractPass` measures Runtime contract behavior, not retrieval relevance. | Reuse infrastructure patterns in a separate retrieval suite. |
@@ -197,9 +204,12 @@ substitute the new active generation.
 | Reranker fails/times out | Exact RRF fallback | Reranker cannot make retrieval unavailable. |
 | HIGH-risk retrieval fails | Safety flow continues | Preserve risk/report/outbox; use trusted generic fallback, never invented contacts. |
 
-## Legacy migration boundary
+## Historical retrieval migration boundary
 
-P12.2-P12.4 build the new system behind disabled flags while `AgenticRagService` remains available.
+This section records the original P12 plan. It does not authorize legacy-vs-Runtime chat routing;
+ADR-029 requires every chat final answer to execute through the unified Runtime.
+
+P12.2-P12.4 build the new retrieval system behind disabled flags while `AgenticRagService` remains available.
 P12.5 introduces shadow comparison, then switches fresh pre-admission retrieval and
 `knowledge_search` independently. Rollback flags choose a whole path; they never merge incompatible
 legacy/new scores. The legacy direct `AiClient.complete` planner/reviewer is not copied into the new

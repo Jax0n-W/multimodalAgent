@@ -39,7 +39,6 @@ import com.multimodalAgent.agent.tool.campus.SearchCounselingResourcesTool;
 import com.multimodalAgent.agent.tool.campus.SubmitCrisisTicketTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -53,7 +52,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * 旧聊天入口与统一 Agent Runtime 之间的迁移适配层。
+ * 学生聊天入口的统一 Agent Runtime 业务编排服务。
  *
  * <p>该类负责完成一次聊天请求的完整编排：恢复或创建会话、净化输入、判定意图与风险、
  * 持久化用户消息及心理评估事实、按需检索知识证据，然后构造 {@link AgentExecutionRequest}
@@ -64,15 +63,10 @@ import java.util.UUID;
  * 阻断已经确认的安全处理。</p>
  */
 @Service
-@ConditionalOnProperty(
-        prefix = "multimodal-agent.runtime",
-        name = "enabled",
-        havingValue = "true"
-)
-public class ChatMigrationFacade {
+public class UnifiedChatRuntimeService {
 
-    // 记录迁移执行、知识检索降级和最终结果投影失败等运行信息。
-    private static final Logger log = LoggerFactory.getLogger(ChatMigrationFacade.class);
+    // 记录统一执行、知识检索降级和最终结果投影失败等运行信息。
+    private static final Logger log = LoggerFactory.getLogger(UnifiedChatRuntimeService.class);
 
     // 查询当前发起聊天请求的用户账号。
     private final UserAccountRepository users;
@@ -81,7 +75,7 @@ public class ChatMigrationFacade {
     // 读取历史消息并持久化本轮用户消息。
     private final ChatMessageRepository messages;
     // 根据外部 sessionId 恢复会话，或为首次请求创建新会话。
-    private final ChatRuntimeSessionRegistry sessionRegistry;
+    private final ChatSessionRegistry sessionRegistry;
     // 根据本轮输入和历史消息判断 CHAT、CONSULT 或 RISK 路由。
     private final IntentClassifier intentClassifier;
     // 在没有多模态融合结论时执行文本心理状态评估。
@@ -96,14 +90,14 @@ public class ChatMigrationFacade {
     private final StreamingAgentExecutionService execution;
     // 限制本轮 Runtime 可以消耗的模型调用、工具调用和 token 数量。
     private final ExecutionBudget budget;
-    // 将成功完成的 Runtime 结果投影回旧聊天消息模型。
+    // 将成功完成的 Runtime 结果投影回现有聊天消息模型。
     private final ChatHistoryProjector projector;
 
-    public ChatMigrationFacade(
+    public UnifiedChatRuntimeService(
             UserAccountRepository users,
             ChatSessionRepository sessions,
             ChatMessageRepository messages,
-            ChatRuntimeSessionRegistry sessionRegistry,
+            ChatSessionRegistry sessionRegistry,
             IntentClassifier intentClassifier,
             PsychologicalAssessmentService assessmentService,
             AgenticRagService ragService,
@@ -129,7 +123,7 @@ public class ChatMigrationFacade {
     }
 
     /**
-     * 接收旧聊天接口的请求，并返回与旧前端兼容的 SSE 事件流。
+     * 接收学生聊天接口的请求，并返回保持公开契约兼容的 SSE 事件流。
      *
      * @param userId 当前已认证用户的数据库主键
      * @param request 用户文本、会话标识等聊天请求信息
@@ -257,7 +251,10 @@ public class ChatMigrationFacade {
                 .withTrustedBusinessContext(List.of(AgentMessage.system(
                 trustedBusinessContext(intent, risk)
         // RAG 和多模态内容单独放入不可信证据通道，不能获得 SYSTEM 权限。
-        ))).withUntrustedEvidence(untrustedEvidence(rag, multimodal));
+        ))).withUntrustedEvidence(untrustedEvidence(
+                rag,
+                multimodal
+        ));
         // 返回后续异步执行和历史投影所需的最小不可变数据。
         return new PreparedRuntimeChat(userId, session.getPublicId(), runId, executionRequest);
     }
@@ -307,7 +304,7 @@ public class ChatMigrationFacade {
             reactor.core.publisher.FluxSink<ServerSentEvent<ChatStreamEvent>> sink   // 用于向前端发送 SSE 事件的响应流
     ) {
         try {
-            // Bridge 负责把 Runtime 的 token/control 事件转换为旧聊天接口的 SSE 格式。
+            // Bridge 负责把 Runtime 的 token/control 事件转换为公开聊天接口的 SSE 格式。
             RuntimeChatStreamBridge bridge = new RuntimeChatStreamBridge(
                     prepared.sessionId(), sink
             );
@@ -321,7 +318,7 @@ public class ChatMigrationFacade {
                 return;
             }
             try {
-                // 将统一 Runtime 的最终回答写回旧聊天历史，但复用原 runId 保持幂等。
+                // 将统一 Runtime 的最终回答写回现有聊天历史，但复用原 runId 保持幂等。
                 projector.projectCompleted(
                         prepared.runId(), prepared.sessionId(), prepared.userId(),
                         result.finalContent()
@@ -351,7 +348,7 @@ public class ChatMigrationFacade {
             }
         } catch (RuntimeException failure) {
             // 捕获 Runtime、流校验和投影之外的同步异常，统一执行失败收口。
-            log.warn("Migrated chat execution failed for run {}: {}", prepared.runId(),
+            log.warn("Unified chat runtime execution failed for run {}: {}", prepared.runId(),
                     failure.getClass().getSimpleName());
             emitError(sink, prepared.sessionId());
         }
@@ -381,8 +378,12 @@ public class ChatMigrationFacade {
         // 模型上下文需要从旧到新排列，因此把数据库返回的倒序结果反转。
         Collections.reverse(history);
         // 将持久化消息投影成模型适配层使用的 AiMessage 列表。
+        return projectMessages(history);
+    }
+
+    private List<AiMessage> projectMessages(List<ChatMessage> history) {
         return history.stream()
-                // 历史 SYSTEM 消息不可信且可能来自旧实现，迁移时明确排除。
+                // 历史 SYSTEM 消息不是用户会话内容，组装业务历史时明确排除。
                 .filter(message -> message.getRole() != MessageRole.SYSTEM)
                 // 保留 ASSISTANT/USER 角色，同时再次净化历史正文。
                 .map(message -> message.getRole() == MessageRole.ASSISTANT

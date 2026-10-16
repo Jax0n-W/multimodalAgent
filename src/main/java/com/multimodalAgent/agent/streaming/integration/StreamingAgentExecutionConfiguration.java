@@ -2,6 +2,7 @@ package com.multimodalAgent.agent.streaming.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multimodalAgent.agent.adapter.model.springai.SpringAiModelToolDefinitionProjector;
+import com.multimodalAgent.agent.adapter.model.springai.streaming.HeuristicOpenAiCompatibleStreamingClient;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingAgentModelAdapter;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingClient;
 import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingOptions;
@@ -78,6 +79,7 @@ import com.multimodalAgent.agent.runtime.tool.policy.DefaultToolPolicyEngine;
 import com.multimodalAgent.agent.service.knowledge.KnowledgeService;
 import com.multimodalAgent.agent.service.CrisisTicketService;
 import com.multimodalAgent.agent.service.ReportService;
+import com.multimodalAgent.agent.service.ai.AiClient;
 import com.multimodalAgent.agent.streaming.ExecutionStreamHub;
 import com.multimodalAgent.agent.streaming.ExecutionStreamPublisher;
 import com.multimodalAgent.agent.streaming.bridge.AgentEventStreamBridge;
@@ -90,7 +92,6 @@ import com.multimodalAgent.agent.tool.campus.SubmitCrisisTicketTool;
 import jakarta.validation.Validator;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -104,19 +105,19 @@ import java.util.function.Function;
 
 /** Opt-in production composition of P8.2–P8.4, P6, and optional P7. */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(
-        prefix = "multimodal-agent.runtime",
-        name = "enabled",
-        havingValue = "true"
-)
 public class StreamingAgentExecutionConfiguration {
 
     @Bean
     public ResolvedModelConfig agentResolvedModelConfig(multimodalAgentProperties properties) {
         String provider = properties.getAi().getProvider().toLowerCase(Locale.ROOT);
-        String modelName = "ollama".equals(provider)
-                ? properties.getAi().getOllama().getModel()
-                : properties.getAi().getOpenai().getModel();
+        String modelName = switch (provider) {
+            case "ollama" -> properties.getAi().getOllama().getModel();
+            case "openai" -> properties.getAi().getOpenai().getModel();
+            case "mock" -> "local-heuristic";
+            default -> throw new IllegalStateException(
+                    "AI_PROVIDER must be ollama, openai, or mock"
+            );
+        };
         return new ResolvedModelConfig(
                 new ModelIdentity(provider, modelName),
                 BigDecimal.valueOf(properties.getAi().getTemperature()),
@@ -201,15 +202,13 @@ public class StreamingAgentExecutionConfiguration {
             ));
         }
         multimodalAgentProperties.Memory memory = properties.getRuntime().getMemory();
-        if (memory.isEnabled()) {
-            sources.add(new ConversationMemorySource(
-                    memoryReader,
-                    new ConversationMemoryPolicy(
-                            memory.getMaxTurns(),
-                            memory.getMaxTotalChars()
-                    )
-            ));
-        }
+        sources.add(new ConversationMemorySource(
+                memoryReader,
+                new ConversationMemoryPolicy(
+                        memory.getMaxTurns(),
+                        memory.getMaxTotalChars()
+                )
+        ));
         sources.add(new RequestMessageContextSource());
         return new AgentContextAssembler(
                 sources,
@@ -226,7 +225,8 @@ public class StreamingAgentExecutionConfiguration {
     @Bean
     public OpenAiCompatibleStreamingClient agentStreamingClient(
             multimodalAgentProperties properties,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            AiClient aiClient
     ) {
         String provider = properties.getAi().getProvider().toLowerCase(Locale.ROOT);
         return switch (provider) {
@@ -240,8 +240,9 @@ public class StreamingAgentExecutionConfiguration {
                     properties.getAi().getOpenai().getApiKey(),
                     objectMapper
             );
+            case "mock" -> new HeuristicOpenAiCompatibleStreamingClient(aiClient);
             default -> throw new IllegalStateException(
-                    "Agent Runtime streaming requires AI_PROVIDER=ollama or openai"
+                    "AI_PROVIDER must be ollama, openai, or mock"
             );
         };
     }

@@ -97,9 +97,6 @@ fixtures. Do not expose this configuration publicly or reuse these credentials i
 
 On a Unix-like shell, `./scripts/run-dev.sh` verifies/starts Ollama and launches the same MVP mode:
 
-- `AGENT_RUNTIME_ENABLED=true`
-- `AGENT_CHAT_MIGRATION_ENABLED=true`
-- `AGENT_MEMORY_ENABLED=true`
 - `AGENT_SKILLS_ENABLED=true`
 - `RAG_HYBRID_MVP_ENABLED=true`
 - `RAG_RETRIEVAL_MODE=HYBRID_RRF`
@@ -112,6 +109,9 @@ Environment variables override each value. See [the demo guide](docs/p13/demo-gu
 Windows startup, rollback and troubleshooting.
 
 ## Demo Scenarios
+
+Text and multimodal chat always use the Unified Agent Runtime. There is no legacy-chat routing
+flag or migration-marker table. Every chat session is Runtime-native from creation.
 
 All chat calls use the authenticated student endpoint and return SSE.
 

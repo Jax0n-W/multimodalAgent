@@ -1,5 +1,7 @@
 package com.multimodalAgent.agent.service.chat;
 
+import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiCompatibleStreamingClient;
+import com.multimodalAgent.agent.adapter.model.springai.streaming.OpenAiStreamEvent;
 import com.multimodalAgent.agent.domain.RiskLevel;
 import com.multimodalAgent.agent.dto.ChatRequest;
 import com.multimodalAgent.agent.dto.ChatStreamEvent;
@@ -14,6 +16,7 @@ import com.multimodalAgent.agent.service.knowledge.KnowledgeIngestionService;
 import com.multimodalAgent.agent.service.mcp.AlertNotifier;
 import com.multimodalAgent.agent.service.mcp.ExcelReportWriter;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -40,9 +43,6 @@ import static org.mockito.Mockito.when;
 
 @SpringBootTest(properties = {
         "multimodal-agent.ai.provider=ollama",
-        "multimodal-agent.runtime.enabled=true",
-        "multimodal-agent.runtime.chat-migration.enabled=false",
-        "multimodal-agent.runtime.memory.enabled=false",
         "multimodal-agent.runtime.skills.enabled=false",
         "multimodal-agent.knowledge.use-chroma=false",
         "multimodal-agent.mcp.email.outbox-worker-enabled=false"
@@ -68,6 +68,7 @@ class HighRiskRetrievalOrderingMySqlIntegrationTest {
     @Autowired private HighRiskNotificationIntentRepository intents;
 
     @MockBean private AiClient legacyAiClient;
+    @MockBean private OpenAiCompatibleStreamingClient runtimeProvider;
     @MockBean private AgenticRagService ragService;
     @MockBean private KnowledgeIngestionService knowledgeIngestionService;
     @MockBean private HighRiskNotificationDispatcher notificationDispatcher;
@@ -89,6 +90,7 @@ class HighRiskRetrievalOrderingMySqlIntegrationTest {
             throw new QueryTimeoutException("knowledge timeout");
         }).when(ragService).retrieve(anyString(), anyList());
         when(legacyAiClient.stream(any())).thenReturn(Flux.just("安全支持"));
+        when(runtimeProvider.stream(any())).thenReturn(response("safe runtime support"));
         var student = users.findByUsername("student").orElseThrow();
 
         List<ChatStreamEvent> events = chatService.streamChat(
@@ -104,5 +106,32 @@ class HighRiskRetrievalOrderingMySqlIntegrationTest {
                 .toList();
         assertEquals(1, matching.size());
         assertEquals(1, intents.findByReportId(matching.get(0).getId()).size());
+    }
+
+    private Flux<OpenAiStreamEvent> response(String content) {
+        OpenAiApi.ChatCompletionMessage message = new OpenAiApi.ChatCompletionMessage(
+                content,
+                OpenAiApi.ChatCompletionMessage.Role.ASSISTANT
+        );
+        OpenAiApi.ChatCompletionChunk.ChunkChoice choice =
+                new OpenAiApi.ChatCompletionChunk.ChunkChoice(
+                        OpenAiApi.ChatCompletionFinishReason.STOP,
+                        0,
+                        message,
+                        null
+                );
+        return Flux.just(
+                new OpenAiStreamEvent.Chunk(new OpenAiApi.ChatCompletionChunk(
+                        "mysql-unified-runtime-response",
+                        List.of(choice),
+                        1L,
+                        "test-model",
+                        null,
+                        null,
+                        "chat.completion.chunk",
+                        null
+                )),
+                OpenAiStreamEvent.Done.INSTANCE
+        );
     }
 }

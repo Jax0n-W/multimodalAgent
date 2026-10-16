@@ -1,5 +1,10 @@
 # P12.2-P12.6 Implementation Roadmap
 
+> Chat-routing update (2026-10-16): ADR-029 supersedes this roadmap's staged
+> legacy-session/new-session Runtime rollout. Chat now has a single execution path through
+> `UnifiedChatRuntimeService`; retrieval generation and backend rollout controls must not select a
+> different final-answer engine.
+
 ## Delivery rules
 
 Each increment is independently reviewable and defaults OFF until its acceptance gate passes. Work
@@ -238,10 +243,11 @@ fresh-chat reordering, legacy removal, production traffic, and P13.
 
 ### Scope
 
-Integrate the accepted engine in the two declared modes, add a backward-compatible contextual-tool
+Integrate the accepted retrieval engine in its pre-admission and Runtime-tool modes, add a backward-compatible contextual-tool
 adapter, freeze pre-admission evidence into existing untrusted context, bind Runtime tool generation/
 principal, preserve the P12.1H risk/report/outbox-before-retrieval ordering, and perform
-flag-controlled rollout from `AgenticRagService`. Preserve external chat/SSE/history and all P10
+controlled retrieval rollout from `AgenticRagService` without introducing a second chat execution
+route. Preserve external chat/SSE/history and all P10
 Recovery semantics.
 
 ### Dependencies
@@ -259,8 +265,8 @@ Recovery semantics.
 - Durable `RetrievalAttemptBinding` attached to existing tool-execution identity: run, toolCall,
   principal-policy hash, generation, request hash. It is supporting metadata, not a second outcome
   truth.
-- Feature flags independently select legacy/new pre-admission and legacy/new tool paths; cohort is
-  auditable.
+- Retrieval rollout controls may select the retrieval implementation at the pre-admission and tool
+  integration points; they never select a legacy final-answer engine. Cohort is auditable.
 
 ### Migrations
 
@@ -297,14 +303,15 @@ Recovery semantics.
 - HIGH-risk trace: report + fenced outbox intent committed before a hung/failed retriever; generic
   trusted fallback contains no fabricated campus data.
 - External SSE schema/order and exactly one terminal event; chat history final answer equality.
-- Feature-flag fresh-session/legacy-session routing and rollback without mixed evidence.
+- New-session creation and later turns both use Runtime, with no legacy final-answer fallback and no
+  mixed evidence.
 
 ### Failure scenarios
 
 Missing authenticated user in runtime context, scope resolver outage, bound generation retired too
 early, crash before/after retrieval outcome durability, malicious evidence, retrieval deadline,
-context persistence failure, model failure after safety commit, flag rollback mid-session, and legacy
-planner outage.
+context persistence failure, model failure after safety commit, retrieval rollback mid-session, and
+legacy planner outage.
 
 ### Acceptance Gate
 

@@ -66,9 +66,7 @@ management:
 
 multimodal-agent:
   runtime:
-    enabled: ${AGENT_RUNTIME_ENABLED:false}
     memory:
-      enabled: ${AGENT_MEMORY_ENABLED:false}
       max-turns: ${AGENT_MEMORY_MAX_TURNS:6}
       max-total-chars: ${AGENT_MEMORY_MAX_TOTAL_CHARS:12000}
     skills:
@@ -76,8 +74,6 @@ multimodal-agent:
     tools:
       read-timeout: ${AGENT_TOOL_READ_TIMEOUT:5s}
       mutation-timeout: ${AGENT_TOOL_MUTATION_TIMEOUT:10s}
-    chat-migration:
-      enabled: ${AGENT_CHAT_MIGRATION_ENABLED:false}
     budget:
       max-model-calls: ${AGENT_BUDGET_MAX_MODEL_CALLS:}
       max-tool-calls: ${AGENT_BUDGET_MAX_TOOL_CALLS:}

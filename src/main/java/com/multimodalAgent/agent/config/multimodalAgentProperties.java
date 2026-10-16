@@ -53,20 +53,10 @@ public class multimodalAgentProperties {
     }
 
     public static class AgentRuntime {
-        private boolean enabled;
         private final Budget budget = new Budget();
         private final Memory memory = new Memory();
         private final Skills skills = new Skills();
         private final Tooling tools = new Tooling();
-        private final ChatMigration chatMigration = new ChatMigration();
-
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        public void setEnabled(boolean enabled) {
-            this.enabled = enabled;
-        }
 
         public Budget getBudget() {
             return budget;
@@ -84,9 +74,6 @@ public class multimodalAgentProperties {
             return tools;
         }
 
-        public ChatMigration getChatMigration() {
-            return chatMigration;
-        }
     }
 
     public static class Tooling {
@@ -120,18 +107,6 @@ public class multimodalAgentProperties {
         }
     }
 
-    public static class ChatMigration {
-        private boolean enabled;
-
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        public void setEnabled(boolean enabled) {
-            this.enabled = enabled;
-        }
-    }
-
     public static class Skills {
         private boolean enabled;
 
@@ -145,17 +120,8 @@ public class multimodalAgentProperties {
     }
 
     public static class Memory {
-        private boolean enabled;
         private int maxTurns = 6;
         private int maxTotalChars = 12000;
-
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        public void setEnabled(boolean enabled) {
-            this.enabled = enabled;
-        }
 
         public int getMaxTurns() {
             return maxTurns;

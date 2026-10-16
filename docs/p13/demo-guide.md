@@ -24,9 +24,6 @@ curl.exe -u student:student123 http://localhost:8080/api/agent/status
 The default values resolve to:
 
 ```text
-AGENT_RUNTIME_ENABLED=true
-AGENT_CHAT_MIGRATION_ENABLED=true
-AGENT_MEMORY_ENABLED=true
 AGENT_SKILLS_ENABLED=true
 RAG_HYBRID_MVP_ENABLED=true
 RAG_RETRIEVAL_MODE=HYBRID_RRF

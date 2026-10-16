@@ -58,7 +58,6 @@ class AgentRuntimeMySqlMigrationTest {
                            'tool_reconciliation_attempts',
                            'tool_execution_outcomes',
                            'agent_context_snapshots',
-                           'chat_runtime_sessions',
                            'chat_history_projections',
                            'high_risk_notification_intents',
                            'knowledge_chunks',
@@ -69,7 +68,7 @@ class AgentRuntimeMySqlMigrationTest {
             statement.setString(1, MYSQL.getDatabaseName());
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
-                assertEquals(14, resultSet.getInt(1));
+                assertEquals(13, resultSet.getInt(1));
             }
         }
 
@@ -110,9 +109,6 @@ class AgentRuntimeMySqlMigrationTest {
             assertColumns(connection, "agent_context_snapshots", List.of(
                     "snapshot_id", "schema_version", "run_id", "session_id", "user_id",
                     "context_hash", "context_json", "created_at"
-            ));
-            assertColumns(connection, "chat_runtime_sessions", List.of(
-                    "session_id", "user_id", "created_at"
             ));
             assertColumns(connection, "chat_history_projections", List.of(
                     "run_id", "session_id", "user_id", "status", "chat_message_id",

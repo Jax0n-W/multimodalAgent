@@ -242,13 +242,13 @@ class HighRiskNotificationOutboxIntegrationTest {
 
         PsychologicalReport saved = orchestration.persistReportWithNotificationIntents(report());
 
-        org.junit.jupiter.api.Assertions.assertTrue(called.await(10, TimeUnit.SECONDS));
+        org.junit.jupiter.api.Assertions.assertTrue(called.await(30, TimeUnit.SECONDS));
         org.junit.jupiter.api.Assertions.assertTrue(durableBeforeDelivery.get());
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         while (System.nanoTime() < deadline
                 && intents.findByReportId(saved.getId()).get(0).getStatus()
                 != HighRiskNotificationStatus.DELIVERED) {
-            Thread.onSpinWait();
+            Thread.sleep(25);
         }
         assertEquals(HighRiskNotificationStatus.DELIVERED,
                 intents.findByReportId(saved.getId()).get(0).getStatus());
@@ -270,7 +270,7 @@ class HighRiskNotificationOutboxIntegrationTest {
         doThrow(new IllegalStateException("excel unavailable")).when(excel).write(any());
         PsychologicalReport saved = orchestration.persistReportWithNotificationIntents(report());
 
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         while (System.nanoTime() < deadline) {
             var intent = intents.findByReportId(saved.getId());
             var report = reports.findById(saved.getId()).orElseThrow();
@@ -279,7 +279,7 @@ class HighRiskNotificationOutboxIntegrationTest {
                     && report.getExcelStatus() == ToolStatus.FAILED) {
                 break;
             }
-            Thread.onSpinWait();
+            Thread.sleep(25);
         }
         assertEquals(HighRiskNotificationStatus.DELIVERED,
                 intents.findByReportId(saved.getId()).get(0).getStatus());

@@ -1,9 +1,12 @@
 # ADR-025: Legacy Chat Migration to Unified Agent Runtime
 
-- Status: Accepted
+- Status: Superseded by ADR-029
 - Date: 2026-10-10
 - Phase: P11.4
 - Builds on: ADR-022, ADR-023, and ADR-024
+
+> Historical record only. Do not restore the flag, marker table, or session-based split described
+> below. ADR-029 replaces them with one mandatory Unified Agent Runtime path.
 
 ## Legacy / Unified execution boundary
 

@@ -9,7 +9,6 @@ import com.multimodalAgent.agent.runtime.model.AgentMessage;
 import com.multimodalAgent.agent.security.CurrentUser;
 import com.multimodalAgent.agent.streaming.integration.StreamingAgentExecutionService;
 import jakarta.validation.Valid;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -22,14 +21,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
-/** Separate P8.3 Agent entry; legacy chat behavior remains unchanged. */
+/** Direct Agent Runtime entry point for callers that do not use the chat compatibility API. */
 @RestController
 @RequestMapping("/api/agent/runs")
-@ConditionalOnProperty(
-        prefix = "multimodal-agent.runtime",
-        name = "enabled",
-        havingValue = "true"
-)
 public final class AgentRunController {
 
     private final StreamingAgentExecutionService execution;

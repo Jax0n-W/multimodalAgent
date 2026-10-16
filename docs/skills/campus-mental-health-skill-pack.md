@@ -110,7 +110,7 @@ without treating generated text as proof of psychological effectiveness:
    normal Skill.
 
 Reproducible setup uses the project's normal AI provider configuration, sets
-`AGENT_RUNTIME_ENABLED=true` and `AGENT_SKILLS_ENABLED=true`, starts the application, and submits
+`AGENT_SKILLS_ENABLED=true`, starts the application, and submits
 the checklist prompts through the authenticated Runtime entry point. Ollama is not started by the
 automated test suite.
 

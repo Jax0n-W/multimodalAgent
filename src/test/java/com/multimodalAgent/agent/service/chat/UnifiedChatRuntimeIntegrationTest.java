@@ -15,7 +15,6 @@ import com.multimodalAgent.agent.persistence.entity.AgentRunEntity;
 import com.multimodalAgent.agent.persistence.repository.AgentContextSnapshotRepository;
 import com.multimodalAgent.agent.persistence.repository.AgentRunRepository;
 import com.multimodalAgent.agent.persistence.repository.ChatHistoryProjectionRepository;
-import com.multimodalAgent.agent.persistence.repository.ChatRuntimeSessionRepository;
 import com.multimodalAgent.agent.repository.ChatMessageRepository;
 import com.multimodalAgent.agent.repository.HighRiskNotificationIntentRepository;
 import com.multimodalAgent.agent.repository.PsychologicalReportRepository;
@@ -71,21 +70,17 @@ import static org.mockito.Mockito.when;
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:p114-chat;MODE=MySQL;DATABASE_TO_LOWER=TRUE",
         "multimodal-agent.ai.provider=ollama",
-        "multimodal-agent.runtime.enabled=true",
-        "multimodal-agent.runtime.chat-migration.enabled=true",
-        "multimodal-agent.runtime.memory.enabled=true",
         "multimodal-agent.runtime.skills.enabled=true",
         "multimodal-agent.knowledge.use-chroma=false",
         "multimodal-agent.mcp.email.outbox-worker-enabled=false"
 })
 @AutoConfigureWebTestClient
-class ChatMigrationIntegrationTest {
+class UnifiedChatRuntimeIntegrationTest {
 
     @Autowired private WebTestClient webClient;
     @Autowired private ChatService chatService;
     @Autowired private AgentRunRepository runs;
     @Autowired private AgentContextSnapshotRepository snapshots;
-    @Autowired private ChatRuntimeSessionRepository runtimeSessions;
     @Autowired private ChatHistoryProjectionRepository projections;
     @Autowired private ChatMessageRepository chatMessages;
     @Autowired private PsychologicalReportRepository reports;
@@ -294,8 +289,6 @@ class ChatMigrationIntegrationTest {
         List<ChatStreamEvent> first = postChat(null, "请解释 Java 接口");
         assertEquals(List.of("meta", "token", "token", "done"), types(first));
         String sessionId = first.get(0).sessionId();
-        assertTrue(runtimeSessions.existsById(sessionId));
-
         List<ChatStreamEvent> second = postChat(sessionId, "请继续用 Java 解释");
         assertEquals(List.of("meta", "token", "done"), types(second));
         assertEquals(sessionId, second.get(0).sessionId());
@@ -545,7 +538,7 @@ class ChatMigrationIntegrationTest {
                             finish, 0, message, null
                     );
             events.add(new OpenAiStreamEvent.Chunk(new OpenAiApi.ChatCompletionChunk(
-                    "chat-migration-response", List.of(choice), 1L, "test-model",
+                    "unified-runtime-response", List.of(choice), 1L, "test-model",
                     null, null, "chat.completion.chunk", null
             )));
         }

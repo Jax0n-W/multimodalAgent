@@ -232,8 +232,9 @@ ownership. No second RAG agent loop is added.
 
 ### 11. High-risk ordering
 
-P12.1H applies this rule immediately to both `ChatMigrationFacade` and legacy `ChatService` rather
-than deferring it to P12.5. Classification and assessment determine authoritative risk;
+At the P12.1H baseline this rule applied to both `ChatMigrationFacade` and legacy `ChatService` rather
+than being deferred to P12.5. ADR-029 has since consolidated both paths into
+`UnifiedChatRuntimeService`, which preserves the same ordering. Classification and assessment determine authoritative risk;
 `ToolOrchestrationService.persistReportWithNotificationIntents` atomically persists the report,
 AlertRecord, and notification intent and returns only after the transactional proxy commits. Optional
 legacy RAG begins afterward.
@@ -275,8 +276,8 @@ Provider embeddings/rerankers are opt-in baselines. Proposed gates and methodolo
 - Urgent revocation is secure even while derived cleanup lags.
 - MySQL and Chroma compatibility become explicit deployment requirements and integration-test
   obligations.
-- The legacy path remains available for bounded rollback until P12.6 gates pass; it is not declared
-  production-ready merely because it remains present.
+- Retrieval backends may retain a bounded rollback path until P12.6 gates pass. This does not restore
+  the legacy chat final-answer route, which ADR-029 removes.
 
 ## External compatibility references
 

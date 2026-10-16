@@ -40,7 +40,8 @@ handoff workspace changes.
 - MySQL Testcontainers 8.0.36 and Redis Testcontainers 7.2 actually started during the suite.
 - Flyway V1-V14 ran against a real MySQL container. V13 preserves knowledge text capacity; V14
   preserves durable snapshot/checkpoint/outcome payload capacity.
-- Legacy chat and RAG rollback switches are covered by `ChatMigrationLegacyModeTest` and
+- Single-Runtime chat routing and multi-turn Runtime memory are covered by
+  `UnifiedChatRuntimeRoutingTest`; retrieval degradation remains covered by
   `HybridRagMvpIntegrationTest`.
 - Recovery coverage includes frozen evidence reuse, same-run resume and no duplicate safety side
   effects; no artificial process crash was injected through the public HTTP API.

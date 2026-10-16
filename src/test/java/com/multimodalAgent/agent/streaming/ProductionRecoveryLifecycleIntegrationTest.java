@@ -74,7 +74,6 @@ import static org.mockito.Mockito.when;
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:p10h-recovery;MODE=MySQL;DATABASE_TO_LOWER=TRUE",
         "multimodal-agent.ai.provider=ollama",
-        "multimodal-agent.runtime.enabled=true",
         "multimodal-agent.knowledge.use-chroma=false"
 })
 @AutoConfigureWebTestClient

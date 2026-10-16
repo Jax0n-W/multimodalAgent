@@ -22,7 +22,7 @@ class SkillProductionConfigurationTest {
             new StreamingAgentExecutionConfiguration();
 
     @Test
-    void skillsAreDisabledByDefaultAndExistingRequestOnlyBehaviorIsUnchanged() {
+    void skillsAreDisabledByDefaultWhileRuntimeMemoryRemainsActive() {
         AtomicInteger memoryReads = new AtomicInteger();
         ConversationMemoryReader reader = query -> {
             memoryReads.incrementAndGet();
@@ -33,8 +33,11 @@ class SkillProductionConfigurationTest {
                 new multimodalAgentProperties(), new ObjectMapper(), reader
         ).assemble(input("我最近睡不着"));
 
-        assertEquals(0, memoryReads.get());
-        assertEquals(List.of("chat-business-context", "chat-untrusted-evidence", "request-messages"), snapshot.orderedContributions().stream()
+        assertEquals(1, memoryReads.get());
+        assertEquals(List.of(
+                "chat-business-context", "chat-untrusted-evidence",
+                "conversation-memory", "request-messages"
+        ), snapshot.orderedContributions().stream()
                 .map(value -> value.sourceId()).toList());
         assertEquals(List.of(AgentMessage.user("我最近睡不着")), snapshot.messages());
     }
@@ -48,7 +51,9 @@ class SkillProductionConfigurationTest {
                 properties, new ObjectMapper(), query -> List.of()
         ).assemble(input("我最近睡不着"));
 
-        assertEquals(List.of("agent-skills", "chat-business-context", "chat-untrusted-evidence", "request-messages"),
+        assertEquals(List.of(
+                        "agent-skills", "chat-business-context", "chat-untrusted-evidence",
+                        "conversation-memory", "request-messages"),
                 snapshot.orderedContributions().stream().map(value -> value.sourceId()).toList());
         assertEquals(2, snapshot.messages().size());
         assertEquals("Trusted Skill: sleep-guidance@2", snapshot.messages().get(0)
@@ -59,7 +64,6 @@ class SkillProductionConfigurationTest {
     void enabledSkillMemoryAndRequestUseStableProductionOrder() {
         multimodalAgentProperties properties = new multimodalAgentProperties();
         properties.getRuntime().getSkills().setEnabled(true);
-        properties.getRuntime().getMemory().setEnabled(true);
         ConversationMemoryReader reader = query -> List.of(new ConversationTurn(
                 "old-run", "session", 7L, "old-user", "old-assistant",
                 Instant.parse("2026-10-10T00:00:00Z")
